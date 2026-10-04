@@ -17,7 +17,7 @@ struct WatchAppShortcuts: AppShortcutsProvider {
                 "Record a transcription with \(.applicationName)",
                 "Capture audio in \(.applicationName)"
             ],
-            shortTitle: "GigaAction",
+            shortTitle: LocalizedStringResource("GigaAction", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             systemImageName: "note.text"
         )
 
@@ -31,7 +31,7 @@ struct WatchAppShortcuts: AppShortcutsProvider {
                 "Add a thought to Work on my watch in \(.applicationName)",
                 "Prepare work on my watch in \(.applicationName)"
             ],
-            shortTitle: "Add to Work",
+            shortTitle: LocalizedStringResource("Add to Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             systemImageName: "tray.and.arrow.down.fill"
         )
     }

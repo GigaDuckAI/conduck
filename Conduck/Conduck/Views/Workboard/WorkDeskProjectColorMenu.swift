@@ -32,11 +32,11 @@ struct WorkDeskProjectColorMenu: View {
                     .tag(color)
                 }
             } label: {
-                Text(LocalizedStringResource("workdesk.project.color", defaultValue: "Project color"))
+                Text(LocalizedStringResource("workdesk.project.color", defaultValue: "Project color", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             .pickerStyle(.inline)
         } label: {
-            Label(LocalizedStringResource("workdesk.project.color", defaultValue: "Project color"),
+            Label(LocalizedStringResource("workdesk.project.color", defaultValue: "Project color", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                   systemImage: "paintpalette")
         }
         .accessibilityIdentifier("workdesk-project-color-\(project.id.uuidString)")
@@ -87,12 +87,12 @@ extension WorkDeskProjectColor {
 
     var title: LocalizedStringResource {
         switch self {
-        case .amber: LocalizedStringResource("workdesk.project.color.amber", defaultValue: "Amber")
-        case .sage: LocalizedStringResource("workdesk.project.color.sage", defaultValue: "Sage")
-        case .blue: LocalizedStringResource("workdesk.project.color.blue", defaultValue: "Blue")
-        case .lavender: LocalizedStringResource("workdesk.project.color.lavender", defaultValue: "Lavender")
-        case .coral: LocalizedStringResource("workdesk.project.color.coral", defaultValue: "Coral")
-        case .slate: LocalizedStringResource("workdesk.project.color.slate", defaultValue: "Slate")
+        case .amber: LocalizedStringResource("workdesk.project.color.amber", defaultValue: "Amber", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .sage: LocalizedStringResource("workdesk.project.color.sage", defaultValue: "Sage", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .blue: LocalizedStringResource("workdesk.project.color.blue", defaultValue: "Blue", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .lavender: LocalizedStringResource("workdesk.project.color.lavender", defaultValue: "Lavender", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .coral: LocalizedStringResource("workdesk.project.color.coral", defaultValue: "Coral", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .slate: LocalizedStringResource("workdesk.project.color.slate", defaultValue: "Slate", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }

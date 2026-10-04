@@ -212,11 +212,11 @@ enum UntrustedLinkPolicy {
             ? String(localized: LocalizedStringResource(
                 "markdownLink.confirm.title",
                 defaultValue: "Open this link outside Conduck?"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             : String(localized: LocalizedStringResource(
                 "markdownLink.refused.title",
                 defaultValue: "Conduck won't open this link"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     fileprivate static func message(for prompt: Prompt) -> String {
@@ -227,19 +227,19 @@ enum UntrustedLinkPolicy {
             return String(format: String(localized: LocalizedStringResource(
                 "markdownLink.confirm.message",
                 defaultValue: "This isn't a web link — it asks another app on your device to handle:\n\n%@\n\nThe link's text was written by your AI and can say anything, so open it only if you expected this."
-            )), prompt.url.absoluteString)
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), prompt.url.absoluteString)
 
         case .refuse(.activeContent):
             return String(format: String(localized: LocalizedStringResource(
                 "markdownLink.refused.activeContent.message",
                 defaultValue: "This link carries content of its own instead of naming a place to go (%@:), so there's nothing you could check before it opens. Conduck doesn't open those."
-            )), prompt.url.scheme ?? "")
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), prompt.url.scheme ?? "")
 
         case .refuse(.tooLongToShow):
             return String(format: String(localized: LocalizedStringResource(
                 "markdownLink.refused.tooLong.message",
                 defaultValue: "This isn't a web link, and its destination runs to %1$d characters — too long to show you in full. Conduck won't open a destination you can't check first. It starts with:\n\n%2$@"
-            )), prompt.url.absoluteString.count, truncatedDestination(for: prompt.url))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), prompt.url.absoluteString.count, truncatedDestination(for: prompt.url))
 
         case .open, .ignore:
             // Unreachable: `handleTap` only prompts for `.confirm` / `.refuse`.
@@ -258,21 +258,21 @@ enum UntrustedLinkPolicy {
         String(localized: LocalizedStringResource(
             "markdownLink.confirm.open",
             defaultValue: "Open"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     fileprivate static var cancelButtonTitle: String {
         String(localized: LocalizedStringResource(
             "markdownLink.confirm.cancel",
             defaultValue: "Cancel"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     fileprivate static var acknowledgeButtonTitle: String {
         String(localized: LocalizedStringResource(
             "markdownLink.refused.acknowledge",
             defaultValue: "OK"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     #if os(macOS)

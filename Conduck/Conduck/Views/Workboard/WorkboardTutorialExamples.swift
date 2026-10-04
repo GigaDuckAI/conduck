@@ -23,7 +23,7 @@ struct WorkboardTourCaptureCue: View {
                 #if os(macOS)
                 Text(LocalizedStringResource(
                     "workdesk.tour.capture.mac.action", defaultValue: "Capture to Work…"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.headline)
                 if let shortcut = KeyboardShortcuts.getShortcut(for: .captureToWork) {
                     Text(verbatim: shortcut.description)
@@ -33,7 +33,7 @@ struct WorkboardTourCaptureCue: View {
                 #else
                 Text(LocalizedStringResource(
                     "workdesk.tour.example.add", defaultValue: "Add to Work"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.headline)
                 #endif
             }
@@ -65,11 +65,11 @@ struct WorkboardTourProjectCue: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text(LocalizedStringResource(
                     "workdesk.tour.example.project", defaultValue: "Website refresh"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.headline)
                 Text(LocalizedStringResource(
                     "workdesk.tour.example.project.count", defaultValue: "2 materials"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
             }
@@ -88,13 +88,13 @@ struct WorkboardTourRequestCue: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(LocalizedStringResource(
                 "workdesk.tour.example.task", defaultValue: "Draft a clearer homepage."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .onboardingScaledFont(.headline)
             .foregroundStyle(AppColors.textPrimary)
             Label {
                 Text(LocalizedStringResource(
                     "workdesk.tour.example.project.count", defaultValue: "2 materials"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } icon: {
                 Image(systemName: "paperclip").accessibilityHidden(true)
             }

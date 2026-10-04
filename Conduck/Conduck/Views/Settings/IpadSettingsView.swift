@@ -103,12 +103,12 @@ struct IpadSettingsView: View {
 
         var title: LocalizedStringResource {
             switch self {
-            case .general:    return LocalizedStringResource("settings.general.section.title", defaultValue: "General")
-            case .personalAI: return LocalizedStringResource("settings.remoteAgent.section.title", defaultValue: "Personal AI")
-            case .voice:      return LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice")
+            case .general:    return LocalizedStringResource("settings.general.section.title", defaultValue: "General", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            case .personalAI: return LocalizedStringResource("settings.remoteAgent.section.title", defaultValue: "Personal AI", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            case .voice:      return LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .usage:      return UsageDashboardIdentity.title
-            case .diagnostics: return LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics")
-            case .about:      return LocalizedStringResource("settings.mac.about.title", defaultValue: "About")
+            case .diagnostics: return LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            case .about:      return LocalizedStringResource("settings.mac.about.title", defaultValue: "About", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             }
         }
 
@@ -205,7 +205,7 @@ struct IpadSettingsView: View {
                 pendingSelection = nil
             }
             Button(
-                LocalizedStringResource("settings.editor.discard.keepEditing", defaultValue: "Keep Editing"),
+                LocalizedStringResource("settings.editor.discard.keepEditing", defaultValue: "Keep Editing", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) { pendingSelection = nil }
         } message: {
@@ -225,8 +225,8 @@ struct IpadSettingsView: View {
             ? LocalizedStringResource(
                 "settings.editor.discard.close.title",
                 defaultValue: "Discard changes and close Settings?"
-            )
-            : LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?")
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     private var outerDiscardConfirmTitle: LocalizedStringResource {
@@ -234,8 +234,8 @@ struct IpadSettingsView: View {
             ? LocalizedStringResource(
                 "settings.editor.discard.close.confirm",
                 defaultValue: "Discard & Close"
-            )
-            : LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard")
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     private var outerDiscardMessage: LocalizedStringResource {
@@ -243,11 +243,11 @@ struct IpadSettingsView: View {
             ? LocalizedStringResource(
                 "settings.editor.discard.close.message",
                 defaultValue: "Your unsaved changes will be lost and Settings will close."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             : LocalizedStringResource(
                 "settings.editor.discard.switch.message",
                 defaultValue: "Switching sections will discard your unsaved changes."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// Done: confirm first when an editor is dirty, else close immediately.
@@ -322,7 +322,7 @@ struct IpadSettingsView: View {
                 Button {
                     attemptDismiss()
                 } label: {
-                    Text(LocalizedStringResource("settings.mac.done", defaultValue: "Done"))
+                    Text(LocalizedStringResource("settings.mac.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .foregroundStyle(AppColors.textPrimary)
                 }
                 // Quiet grey bordered Done — mirrors MacSettingsView (was amber-
@@ -334,7 +334,7 @@ struct IpadSettingsView: View {
             .padding(12)
         }
         .background { gradient }
-        .navigationTitle(Text(LocalizedStringResource("settings.title", defaultValue: "Settings")))
+        .navigationTitle(Text(LocalizedStringResource("settings.title", defaultValue: "Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     /// Top-trailing **Close** for the detail column — same spot iPhone uses,
@@ -456,7 +456,7 @@ private struct AboutPane: View {
                 } label: {
                     Label(
                         LocalizedStringResource("settings.about.licenses.title",
-                                                defaultValue: "Open Source Licenses"),
+                                                defaultValue: "Open Source Licenses", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "doc.plaintext"
                     )
                     .foregroundStyle(AppColors.textPrimary)
@@ -500,7 +500,7 @@ private struct AboutPane: View {
         .sheet(isPresented: $showingMailComposer) {
             MailComposerView(
                 recipient: Constants.feedbackEmail,
-                subject: String(localized: "Conduck Feedback"), // xcstrings
+                subject: String(localized: "Conduck Feedback", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                 body: feedbackEmailBody()
             )
         }

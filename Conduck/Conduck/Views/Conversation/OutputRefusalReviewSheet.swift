@@ -283,14 +283,14 @@ struct OutputRefusalReviewSheet: View {
                 // reading as a verdict about these particular bytes.
                 Text(LocalizedStringResource(
                     "thread.outputs.review.why",
-                    defaultValue: "Conduck puts a one-tap download in the chat for the file types an agent usually produces — documents, images, audio, data, code. Anything else stays in the folder until you've had a look."))
+                    defaultValue: "Conduck puts a one-tap download in the chat for the file types an agent usually produces — documents, images, audio, data, code. Anything else stays in the folder until you've had a look.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Text(LocalizedStringResource(
                     "thread.outputs.review.why.byName",
-                    defaultValue: "Conduck goes by the file's name, not by what's inside it. So this is about what your agent called the file, not a judgment about the file itself."))
+                    defaultValue: "Conduck goes by the file's name, not by what's inside it. So this is about what your agent called the file, not a judgment about the file itself.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -308,7 +308,7 @@ struct OutputRefusalReviewSheet: View {
                     Spacer()
                     Button { dismiss() } label: {
                         Text(LocalizedStringResource(
-                            "attachment.fullscreen.done", defaultValue: "Done"))
+                            "attachment.fullscreen.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .fontWeight(.semibold)
                             .foregroundStyle(AppColors.textPrimary)
                     }
@@ -330,17 +330,17 @@ struct OutputRefusalReviewSheet: View {
         .alert(
             LocalizedStringResource(
                 "fileTransfer.download.softConfirm.title",
-                defaultValue: "Download large file?"),
+                defaultValue: "Download large file?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: $showingLargeSaveConfirm
         ) {
             Button(LocalizedStringResource(
                 "fileTransfer.download.softConfirm.download",
-                defaultValue: "Download")) {
+                defaultValue: "Download", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 if let entry = largeSaveCandidate { beginSave(entry) }
                 largeSaveCandidate = nil
             }
             Button(
-                LocalizedStringResource("fileTransfer.softConfirm.cancel", defaultValue: "Cancel"),
+                LocalizedStringResource("fileTransfer.softConfirm.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) {
                 largeSaveCandidate = nil
@@ -437,10 +437,10 @@ struct OutputRefusalReviewSheet: View {
         entries.count == 1
             ? LocalizedStringResource(
                 "thread.outputs.review.title.one",
-                defaultValue: "About this file")
+                defaultValue: "About this file", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             : LocalizedStringResource(
                 "thread.outputs.review.title.many",
-                defaultValue: "About these files")
+                defaultValue: "About these files", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     // MARK: - The louder warnings
@@ -482,16 +482,16 @@ struct OutputRefusalReviewSheet: View {
     private var configurationWarning: some View {
         warningCard(title: LocalizedStringResource(
             "thread.outputs.review.installer.title.v2",
-            defaultValue: "This kind of file can change a device")) {
+            defaultValue: "This kind of file can change a device", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
             warningBullet(LocalizedStringResource(
                 "thread.outputs.review.installer.what.v2",
-                defaultValue: "Files like this are meant to configure, install, or run something rather than to be read. A profile or certificate changes settings like Wi-Fi, VPN and trust; an installer or program puts software on a machine."))
+                defaultValue: "Files like this are meant to configure, install, or run something rather than to be read. A profile or certificate changes settings like Wi-Fi, VPN and trust; an installer or program puts software on a machine.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             warningBullet(LocalizedStringResource(
                 "thread.outputs.review.installer.when.v2",
-                defaultValue: "Saving it changes nothing. Opening it later — here, or wherever you move it — is the step that does."))
+                defaultValue: "Saving it changes nothing. Opening it later — here, or wherever you move it — is the step that does.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             warningBullet(LocalizedStringResource(
                 "thread.outputs.review.installer.trust",
-                defaultValue: "Open it only if you asked for it and you know what it sets up."))
+                defaultValue: "Open it only if you asked for it and you know what it sets up.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -513,16 +513,16 @@ struct OutputRefusalReviewSheet: View {
     private var macroDocumentWarning: some View {
         warningCard(title: LocalizedStringResource(
             "thread.outputs.review.macro.title",
-            defaultValue: "This kind of file can run code when it's opened")) {
+            defaultValue: "This kind of file can run code when it's opened", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
             warningBullet(LocalizedStringResource(
                 "thread.outputs.review.macro.what",
-                defaultValue: "These file endings mark Word, Excel and PowerPoint files that are allowed to hold macros — small programs saved inside the file itself. The ending says a macro is allowed, not that there is one."))
+                defaultValue: "These file endings mark Word, Excel and PowerPoint files that are allowed to hold macros — small programs saved inside the file itself. The ending says a macro is allowed, not that there is one.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             warningBullet(LocalizedStringResource(
                 "thread.outputs.review.macro.when",
-                defaultValue: "Saving it changes nothing. Opening it in an app that runs macros — Word, Excel or PowerPoint — is the step that can run one."))
+                defaultValue: "Saving it changes nothing. Opening it in an app that runs macros — Word, Excel or PowerPoint — is the step that can run one.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             warningBullet(LocalizedStringResource(
                 "thread.outputs.review.macro.trust",
-                defaultValue: "Open it only if you asked for it and a macro is something you'd expect in it."))
+                defaultValue: "Open it only if you asked for it and a macro is something you'd expect in it.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -603,7 +603,7 @@ struct OutputRefusalReviewSheet: View {
                 .accessibilityLabel(Text(String(
                     format: String(localized: LocalizedStringResource(
                         "thread.outputs.review.file.a11y",
-                        defaultValue: "File %@")),
+                        defaultValue: "File %@", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     entry.name)))
 
             Text(reasonText(entry))
@@ -617,7 +617,7 @@ struct OutputRefusalReviewSheet: View {
             Text(entry.byteSize > 0
                 ? AttachmentChipStyle.formattedSize(entry.byteSize)
                 : String(localized: LocalizedStringResource(
-                    "thread.outputs.review.size.unknown", defaultValue: "Size unknown")))
+                    "thread.outputs.review.size.unknown", defaultValue: "Size unknown", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
 
@@ -628,7 +628,7 @@ struct OutputRefusalReviewSheet: View {
                         .controlSize(.small)
                         .tint(AppColors.textTertiary)
                     Text(LocalizedStringResource(
-                        "thread.outputs.review.saving", defaultValue: "Downloading…"))
+                        "thread.outputs.review.saving", defaultValue: "Downloading…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.textTertiary)
                 }
@@ -636,7 +636,7 @@ struct OutputRefusalReviewSheet: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark")
                     Text(LocalizedStringResource(
-                        "thread.outputs.review.saved", defaultValue: "Saved"))
+                        "thread.outputs.review.saved", defaultValue: "Saved", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppColors.success)
@@ -689,7 +689,7 @@ struct OutputRefusalReviewSheet: View {
         // past a default.
         .accessibilityLabel(Text(String(
             format: String(localized: LocalizedStringResource(
-                "thread.outputs.review.save.a11y", defaultValue: "Save %@ anyway")),
+                "thread.outputs.review.save.a11y", defaultValue: "Save %@ anyway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             entry.name)))
     }
 
@@ -699,9 +699,9 @@ struct OutputRefusalReviewSheet: View {
     /// extraction — so the split has to be in the keys, not in the values.
     private var saveTitle: LocalizedStringResource {
         #if os(macOS)
-        LocalizedStringResource("thread.outputs.review.save.mac", defaultValue: "Save Anyway…")
+        LocalizedStringResource("thread.outputs.review.save.mac", defaultValue: "Save Anyway…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #else
-        LocalizedStringResource("thread.outputs.review.save", defaultValue: "Save anyway…")
+        LocalizedStringResource("thread.outputs.review.save", defaultValue: "Save anyway…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #endif
     }
 
@@ -719,12 +719,12 @@ struct OutputRefusalReviewSheet: View {
             return String(
                 format: String(localized: LocalizedStringResource(
                     "thread.outputs.review.reason.type",
-                    defaultValue: "Conduck doesn't open .%@ files on its own.")),
+                    defaultValue: "Conduck doesn't open .%@ files on its own.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 ext)
         case .noReadableExtension:
             return String(localized: LocalizedStringResource(
                 "thread.outputs.review.reason.noType",
-                defaultValue: "This file's name doesn't say what kind of file it is, so Conduck can't tell what it would be opening."))
+                defaultValue: "This file's name doesn't say what kind of file it is, so Conduck can't tell what it would be opening.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -767,7 +767,7 @@ struct OutputRefusalReviewSheet: View {
         return String(
             format: String(localized: LocalizedStringResource(
                 "fileTransfer.download.softConfirm.message",
-                defaultValue: "%1$@ is %2$@ in size. Large files can take a while to download.")),
+                defaultValue: "%1$@ is %2$@ in size. Large files can take a while to download.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             entry.name,
             AttachmentChipStyle.formattedSize(entry.byteSize))
     }
@@ -836,7 +836,7 @@ struct OutputRefusalReviewSheet: View {
                 saveStates[entry.id] = .failed(
                     message: String(localized: LocalizedStringResource(
                         "fileTransfer.download.failed",
-                        defaultValue: "Couldn't download the file.")),
+                        defaultValue: "Couldn't download the file.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     retryable: true)
             }
         }
@@ -850,7 +850,7 @@ struct OutputRefusalReviewSheet: View {
             message: message.isEmpty
                 ? String(localized: LocalizedStringResource(
                     "fileTransfer.download.failed",
-                    defaultValue: "Couldn't download the file."))
+                    defaultValue: "Couldn't download the file.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 : message,
             retryable: error.isRetryable)
     }
@@ -883,7 +883,7 @@ struct OutputRefusalReviewSheet: View {
             // server verdict, so the row stays tappable for another destination.
             saveStates[entry.id] = .failed(
                 message: String(localized: LocalizedStringResource(
-                    "fileTransfer.save.failed", defaultValue: "Couldn't save the file.")),
+                    "fileTransfer.save.failed", defaultValue: "Couldn't save the file.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 retryable: true)
         }
     }

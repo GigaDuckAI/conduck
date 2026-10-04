@@ -262,7 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `ConduckApp` before the notification fires.
         Task {
             let completed = await SettingsManager.shared.hasCompletedOnboarding()
-            var shouldShow = !completed
+            var shouldShow = !completed || AppLanguageStore.shared.selection == nil
             #if DEBUG
             // Mirror RootView.init() precedence (iOS). Explicit skip intents win
             // over the ambient dev flag so an automated QA launch is never trapped

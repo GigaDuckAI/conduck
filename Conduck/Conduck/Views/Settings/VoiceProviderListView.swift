@@ -68,7 +68,7 @@ struct VoiceProviderListView: View {
         .navigationTitle(Text(LocalizedStringResource(
             "settings.voice.detail.title",
             defaultValue: "Voice"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $route) { route in
             switch route {
@@ -150,7 +150,7 @@ struct VoiceProviderListView: View {
             } label: {
                 HStack(spacing: 12) {
                     Label(
-                        LocalizedStringResource("settings.voice.providersKeys.label", defaultValue: "Providers & Keys"),
+                        LocalizedStringResource("settings.voice.providersKeys.label", defaultValue: "Providers & Keys", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "key.horizontal"
                     )
                     .foregroundStyle(AppColors.textPrimary)
@@ -168,7 +168,7 @@ struct VoiceProviderListView: View {
             Text(LocalizedStringResource(
                 "settings.voice.setup.header",
                 defaultValue: "Voice Setup"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -199,7 +199,7 @@ struct VoiceProviderListView: View {
                 Text(LocalizedStringResource(
                     "settings.voice.readAloud.notificationOpen.v3",
                     defaultValue: "When I open the notification"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textPrimary)
             }
             .tint(AppColors.brandAmber)
@@ -207,18 +207,18 @@ struct VoiceProviderListView: View {
             Text(LocalizedStringResource(
                 "settings.voice.readAloud.header",
                 defaultValue: "Spoken Replies"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             if DeviceCapabilities.isiPad {
                 Text(LocalizedStringResource(
                     "settings.voice.readAloud.footer.ipad.v2",
                     defaultValue: "When a reply arrives as a notification, opening it reads the reply aloud on this iPad."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } else {
                 Text(LocalizedStringResource(
                     "settings.voice.readAloud.footer.v4",
                     defaultValue: "When a reply arrives as a notification, opening it reads the reply aloud on this iPhone."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -227,9 +227,9 @@ struct VoiceProviderListView: View {
     private var providersKeysSummary: Text {
         let count = viewModel.configuredVoiceVendorCount
         if count == 0 {
-            return Text(LocalizedStringResource("settings.voice.providersKeys.summary.none", defaultValue: "None configured"))
+            return Text(LocalizedStringResource("settings.voice.providersKeys.summary.none", defaultValue: "None configured", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
-        return Text(LocalizedStringResource("settings.voice.providersKeys.summary.count", defaultValue: "\(count) configured"))
+        return Text(LocalizedStringResource("settings.voice.providersKeys.summary.count", defaultValue: "\(count) configured", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The native display name for the active language hint — `LanguageList`'s
@@ -237,7 +237,7 @@ struct VoiceProviderListView: View {
     /// STT chooser's `VoiceLanguageHint`.
     private var languageDisplayName: String {
         guard let code = viewModel.preferredLanguage, !code.isEmpty else {
-            return String(localized: "Auto-detect") // xcstrings
+            return String(localized: "Auto-detect", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings
         }
         return LanguageList.nativeName(for: code)
     }
@@ -328,7 +328,7 @@ private struct VoiceProvidersListView: View {
         .navigationTitle(Text(LocalizedStringResource(
             "settings.voice.providersKeys.label",
             defaultValue: "Providers & Keys"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(item: $vendorRoute) { id in
             if let vendor = VoiceVendorRegistry.lookup(id: id, customEndpoints: viewModel.customVoiceEndpoints) {
@@ -356,12 +356,12 @@ private struct VoiceProvidersListView: View {
             Text(LocalizedStringResource(
                 "settings.voice.section.header",
                 defaultValue: "Providers"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.voice.list.footer",
                 defaultValue: "One key per provider unlocks both speech-to-text and text-to-speech. Tap a provider to add a key or manage it."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -378,7 +378,7 @@ private struct VoiceProvidersListView: View {
             Text(LocalizedStringResource(
                 "settings.voice.section.customHeader",
                 defaultValue: "Custom endpoints"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -405,8 +405,8 @@ private struct VoiceProvidersListView: View {
             } label: {
                 Label {
                     Text(canAdd
-                        ? LocalizedStringResource("settings.voice.custom.add", defaultValue: "Add custom endpoint")
-                        : LocalizedStringResource("settings.voice.custom.addAtCap", defaultValue: "Add custom endpoint (limit reached)"))
+                        ? LocalizedStringResource("settings.voice.custom.add", defaultValue: "Add custom endpoint", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("settings.voice.custom.addAtCap", defaultValue: "Add custom endpoint (limit reached)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 } icon: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
@@ -421,7 +421,7 @@ private struct VoiceProvidersListView: View {
                 Text(LocalizedStringResource(
                     "settings.voice.custom.capHint",
                     defaultValue: "Delete an endpoint above to add another."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
             }

@@ -114,12 +114,12 @@ struct FileTransferStageChecklist: View {
         if result.isUploadOnly {
             return String(localized: LocalizedStringResource(
                 "fileTransfer.test.stage.listing.unsupported",
-                defaultValue: "This server can't list folders. Sending files to the agent works; files the agent creates can't come back on their own."))
+                defaultValue: "This server can't list folders. Sending files to the agent works; files the agent creates can't come back on their own.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         if let unverified = result.listingUnverified {
             let lead = String(localized: LocalizedStringResource(
                 "fileTransfer.test.stage.listing.unchecked",
-                defaultValue: "Sending files works. Conduck couldn't check whether files can come back — try this test again."))
+                defaultValue: "Sending files works. Conduck couldn't check whether files can come back — try this test again.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             return lead + " " + unverified.descriptionWithRecovery()
         }
         guard !result.success, let failure = result.failure else { return nil }
@@ -136,17 +136,17 @@ struct FileTransferStageChecklist: View {
     private func stageTitle(_ stage: FileTransferTestStage) -> LocalizedStringResource {
         switch stage {
         case .reachability:
-            return LocalizedStringResource("fileTransfer.test.stage.reachability", defaultValue: "Reachability & TLS")
+            return LocalizedStringResource("fileTransfer.test.stage.reachability", defaultValue: "Reachability & TLS", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .auth:
-            return LocalizedStringResource("fileTransfer.test.stage.auth", defaultValue: "Authentication")
+            return LocalizedStringResource("fileTransfer.test.stage.auth", defaultValue: "Authentication", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .write:
-            return LocalizedStringResource("fileTransfer.test.stage.write", defaultValue: "Write a test file")
+            return LocalizedStringResource("fileTransfer.test.stage.write", defaultValue: "Write a test file", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .read:
-            return LocalizedStringResource("fileTransfer.test.stage.read", defaultValue: "Read it back")
+            return LocalizedStringResource("fileTransfer.test.stage.read", defaultValue: "Read it back", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .listing:
             // The return direction, in the user's terms: this is the capability
             // that decides whether files an agent produces ever reach the device.
-            return LocalizedStringResource("fileTransfer.test.stage.listing", defaultValue: "List a folder")
+            return LocalizedStringResource("fileTransfer.test.stage.listing", defaultValue: "List a folder", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }

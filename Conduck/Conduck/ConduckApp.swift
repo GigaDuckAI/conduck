@@ -218,6 +218,7 @@ struct ConduckApp: App {
     // (applicationShouldTerminateAfterLastWindowClosed → false in AppDelegate),
     // so the menu-bar item survives a closed window. Re-open `main` via the Dock
     // icon (applicationShouldHandleReopen) or the menu bar / popover.
+    @State private var appLanguage = AppLanguageStore.shared.language
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
@@ -274,8 +275,10 @@ struct ConduckApp: App {
         // .openConversationsWindow) or a reply-notification tap
         // (.openConversationDeepLink → opens window + selects the thread).
         Window("Conduck", id: "main") {
-            PersonalWorkbenchView {
-                MainWindowView(coordinator: appDelegate.coordinator)
+            AppLanguageGate {
+                PersonalWorkbenchView {
+                    MainWindowView(coordinator: appDelegate.coordinator)
+                }
             }
                 .frame(minWidth: 880, minHeight: 600)
                 // The window a quiet Mac opens FOR the Work voice intent has to
@@ -286,6 +289,9 @@ struct ConduckApp: App {
                 // only; the composer still consumes.
                 .onAppear {
                     WorkVoiceCaptureLaunchRoute.shared.revealWorkIfPending()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .appLanguageDidChange)) { _ in
+                    appLanguage = AppLanguageStore.shared.language
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .openOnboardingWindow)) { _ in
                     openWindow(id: "onboarding")
@@ -338,7 +344,7 @@ struct ConduckApp: App {
         .commands {
             TextEditingCommands()
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") {
+                Button(String(localized: "Settings…", bundle: AppLocalization.bundle(for: appLanguage, in: .main), locale: appLanguage.locale)) {
                     appDelegate.coordinator.pendingSettingsCategory = nil
                     appDelegate.coordinator.pendingDiagnosticsFocus = nil   // root open: never a diagnostics deep-link
                     appDelegate.coordinator.pendingShowSettings = true
@@ -348,20 +354,20 @@ struct ConduckApp: App {
                 .keyboardShortcut(",", modifiers: .command)
             }
             CommandGroup(replacing: .newItem) {
-                Button("New Conversation") {
+                Button(String(localized: "New Conversation", bundle: AppLocalization.bundle(for: appLanguage, in: .main), locale: appLanguage.locale)) {
                     openWindow(id: "main")
                     NotificationCenter.default.post(name: .newConversation, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
             }
             CommandGroup(after: .newItem) {
-                Button("Work") {
+                Button(String(localized: "Work", bundle: AppLocalization.bundle(for: appLanguage, in: .main), locale: appLanguage.locale)) {
                     openWindow(id: "main")
                     NotificationCenter.default.post(name: .showWorkboard, object: nil)
                 }
                 .keyboardShortcut("1", modifiers: .command)
 
-                Button("Chats") {
+                Button(String(localized: "Chats", bundle: AppLocalization.bundle(for: appLanguage, in: .main), locale: appLanguage.locale)) {
                     openWindow(id: "main")
                     NotificationCenter.default.post(name: .showChats, object: nil)
                 }
@@ -381,7 +387,7 @@ struct ConduckApp: App {
         // Scene-based gate (NOT iOS RootView conditional — macOS Window semantics
         // are clean; iOS-specific .fullScreenCover init-true trap doesn't apply).
         Window("Conduck", id: "onboarding") {
-            OnboardingContainerView(onComplete: {
+            AppLanguageGate { OnboardingContainerView(onComplete: {
                 // Option A: launch is quiet, so after first-run onboarding the
                 // `main` window is NOT already showing — opening it here lands the
                 // user in the app instead of leaving just the menu-bar duck.
@@ -394,9 +400,16 @@ struct ConduckApp: App {
                 // ourselves via `dismissWindow(id:)`.
                 NotificationCenter.default.post(name: .openConversationsWindow, object: nil)
                 dismissWindow(id: "onboarding")
-            })
+            }) }
                 .frame(minWidth: 600, minHeight: 650)
                 .preferredColorScheme(.dark)
+                .onReceive(NotificationCenter.default.publisher(for: .appLanguageDidChange)) { _ in
+                    // An existing install only needs the new language choice.
+                    if SettingsDependencies.processDefault.defaults.bool(forKey: Constants.onboardingCompletedKey) {
+                        openWindow(id: "main")
+                        dismissWindow(id: "onboarding")
+                    }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .openSettingsWindow)) { _ in
                     // Settings is a sheet on the main window now. Raise the
                     // deferred-present flag before opening so MainWindowView.onAppear
@@ -606,7 +619,7 @@ struct ConduckApp: App {
             // — byte-identical to a clean build. The QA banner is attached only in
             // DEBUG, and even then as a layout-neutral empty inset until `isActive`,
             // so a Debug ⌘R without `-ConduckQAMode` is visually unchanged.
-            RootView()
+            AppLanguageGate { RootView() }
                 .preferredColorScheme(.dark)
                 #if DEBUG
                 .safeAreaInset(edge: .top) {

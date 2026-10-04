@@ -39,7 +39,7 @@ struct OpenRouterModelPickerField: View {
                 Text("Model") // xcstrings: hosted-model
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
-                Text(LocalizedStringResource("settings.field.required", defaultValue: "(required)"))
+                Text(LocalizedStringResource("settings.field.required", defaultValue: "(required)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
             }
@@ -47,7 +47,7 @@ struct OpenRouterModelPickerField: View {
                 String(localized: LocalizedStringResource(
                     "settings.remoteAgent.model.placeholder.hosted",
                     defaultValue: "e.g. anthropic/claude-opus-4"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 text: $selection
             )
                 #if os(iOS)
@@ -66,7 +66,7 @@ struct OpenRouterModelPickerField: View {
             Text(LocalizedStringResource(
                 "settings.remoteAgent.model.helper.hosted.onboarding",
                 defaultValue: "Validate your key to load the model list, or type a model ID."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
 
@@ -88,7 +88,7 @@ struct OpenRouterModelPickerField: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.model.suggestions.header",
                     defaultValue: "Available models"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(AppColors.textSecondary)
                 if showFilter {
@@ -96,7 +96,7 @@ struct OpenRouterModelPickerField: View {
                         String(localized: LocalizedStringResource(
                             "settings.remoteAgent.model.suggestions.filter.placeholder",
                             defaultValue: "Filter models"
-                        )),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                         text: $filter
                     )
                         #if os(iOS)
@@ -110,7 +110,7 @@ struct OpenRouterModelPickerField: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.model.suggestions.noMatch",
                         defaultValue: "No models match your filter."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                 } else {

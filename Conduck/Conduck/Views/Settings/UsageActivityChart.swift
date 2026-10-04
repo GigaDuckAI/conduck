@@ -201,7 +201,7 @@ enum UsageChartSegments {
                 order: segments.count,
                 keys: tail.map { Optional($0.key) },
                 label: String(localized: "settings.usage.chart.segment.other.label",
-                              defaultValue: "Other"),
+                              defaultValue: "Other", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 role: .other
             ))
         }
@@ -216,7 +216,7 @@ enum UsageChartSegments {
                 // shared with the unattributed gateway row and the unrecorded
                 // device row — they are the same fact about capture.
                 label: String(localized: "settings.usage.gateway.unattributed",
-                              defaultValue: "Not recorded"),
+                              defaultValue: "Not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 role: .notRecorded
             ))
         }
@@ -363,7 +363,7 @@ struct UsageActivityChart: View {
             selection: Binding(get: { metric }, set: { storedMetric = $0 }),
             options: availableMetrics,
             label: Text(LocalizedStringResource(
-                "settings.usage.chart.metric.label", defaultValue: "Measure")),
+                "settings.usage.chart.metric.label", defaultValue: "Measure", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             title: { Text(title(for: $0)) }
         )
     }
@@ -372,19 +372,19 @@ struct UsageActivityChart: View {
         switch metric {
         case .turns:
             return LocalizedStringResource(
-                "settings.usage.chart.metric.turns", defaultValue: "Turns")
+                "settings.usage.chart.metric.turns", defaultValue: "Turns", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .tokens:
             return LocalizedStringResource(
-                "settings.usage.chart.metric.tokens", defaultValue: "Tokens")
+                "settings.usage.chart.metric.tokens", defaultValue: "Tokens", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .models:
             return LocalizedStringResource(
-                "settings.usage.chart.metric.models", defaultValue: "Models")
+                "settings.usage.chart.metric.models", defaultValue: "Models", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .devices:
             return LocalizedStringResource(
-                "settings.usage.chart.metric.devices", defaultValue: "Devices")
+                "settings.usage.chart.metric.devices", defaultValue: "Devices", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .gateways:
             return LocalizedStringResource(
-                "settings.usage.chart.metric.gateways", defaultValue: "Gateways")
+                "settings.usage.chart.metric.gateways", defaultValue: "Gateways", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -398,7 +398,7 @@ struct UsageActivityChart: View {
             defaultValue: """
                 \(scope.name) · \(scope.attempts) of \(scope.rangeAttempts) \
                 attempts in this range
-                """))
+                """, bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             .font(.caption)
             .monospacedDigit()
             .foregroundStyle(AppColors.textTertiary)
@@ -584,9 +584,9 @@ struct UsageActivityChart: View {
         case .tokens:
             // Compact, because a full token count on a leading axis eats a
             // third of the plot width at every tick.
-            return Int(raw.rounded()).formatted(.number.notation(.compactName))
+            return Int(raw.rounded()).formatted(.number.notation(.compactName).locale(AppLocalization.locale))
         case .turns, .models, .devices, .gateways:
-            return Int(raw.rounded()).formatted(.number)
+            return Int(raw.rounded()).formatted(.number.locale(AppLocalization.locale))
         }
     }
 
@@ -597,11 +597,11 @@ struct UsageActivityChart: View {
     private func xAxisLabel(_ date: Date) -> String {
         switch unit {
         case .day, .week:
-            return date.formatted(.dateTime.month(.abbreviated).day())
+            return date.formatted(.dateTime.month(.abbreviated).day().locale(AppLocalization.locale))
         case .month:
             return spansMultipleYears
-                ? date.formatted(.dateTime.month(.abbreviated).year())
-                : date.formatted(.dateTime.month(.abbreviated))
+                ? date.formatted(.dateTime.month(.abbreviated).year().locale(AppLocalization.locale))
+                : date.formatted(.dateTime.month(.abbreviated).locale(AppLocalization.locale))
         }
     }
 
@@ -612,18 +612,18 @@ struct UsageActivityChart: View {
     }
 
     private var periodAxisName: String {
-        String(localized: "settings.usage.chart.axis.period", defaultValue: "Period")
+        String(localized: "settings.usage.chart.axis.period", defaultValue: "Period", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     private var valueAxisName: String {
         switch metric {
         case .turns:
-            return String(localized: "settings.usage.chart.axis.turns", defaultValue: "Turns")
+            return String(localized: "settings.usage.chart.axis.turns", defaultValue: "Turns", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .tokens:
-            return String(localized: "settings.usage.chart.axis.tokens", defaultValue: "Tokens")
+            return String(localized: "settings.usage.chart.axis.tokens", defaultValue: "Tokens", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .models, .devices, .gateways:
             return String(
-                localized: "settings.usage.chart.axis.attempts", defaultValue: "Attempts")
+                localized: "settings.usage.chart.axis.attempts", defaultValue: "Attempts", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -797,19 +797,19 @@ struct UsageActivityChart: View {
         switch metric {
         case .turns:
             return String(localized: "settings.usage.chart.rest.turns",
-                          defaultValue: "Turns per \(noun)")
+                          defaultValue: "Turns per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .tokens:
             return String(localized: "settings.usage.chart.rest.tokens",
-                          defaultValue: "Tokens per \(noun)")
+                          defaultValue: "Tokens per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .models:
             return String(localized: "settings.usage.chart.rest.models",
-                          defaultValue: "Attempts by model, per \(noun)")
+                          defaultValue: "Attempts by model, per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .devices:
             return String(localized: "settings.usage.chart.rest.devices",
-                          defaultValue: "Attempts by device, per \(noun)")
+                          defaultValue: "Attempts by device, per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .gateways:
             return String(localized: "settings.usage.chart.rest.gateways",
-                          defaultValue: "Attempts by gateway, per \(noun)")
+                          defaultValue: "Attempts by gateway, per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -838,19 +838,19 @@ struct UsageActivityChart: View {
         switch metric {
         case .turns:
             return String(localized: "settings.usage.chart.a11y.turns.stacked",
-                          defaultValue: "Chart of completed and failed turns per \(noun)")
+                          defaultValue: "Chart of completed and failed turns per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .tokens:
             return String(localized: "settings.usage.chart.a11y.tokens.v2",
-                          defaultValue: "Chart of tokens per \(noun)")
+                          defaultValue: "Chart of tokens per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .models:
             return String(localized: "settings.usage.chart.a11y.models",
-                          defaultValue: "Chart of attempts by model per \(noun)")
+                          defaultValue: "Chart of attempts by model per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .devices:
             return String(localized: "settings.usage.chart.a11y.devices",
-                          defaultValue: "Chart of attempts by device per \(noun)")
+                          defaultValue: "Chart of attempts by device per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .gateways:
             return String(localized: "settings.usage.chart.a11y.gateways",
-                          defaultValue: "Chart of attempts by gateway per \(noun)")
+                          defaultValue: "Chart of attempts by gateway per \(noun)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -931,10 +931,10 @@ struct UsageActivityChart: View {
         Text(tokenCoverageDenominator == 0
             ? LocalizedStringResource(
                 "settings.usage.chart.tokens.noneFinished",
-                defaultValue: "No attempt in this range has finished yet.")
+                defaultValue: "No attempt in this range has finished yet.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             : LocalizedStringResource(
                 "settings.usage.chart.tokens.none",
-                defaultValue: "No attempt in this range reported a usable token total."))
+                defaultValue: "No attempt in this range reported a usable token total.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.subheadline)
             .foregroundStyle(AppColors.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -955,7 +955,7 @@ struct UsageActivityChart: View {
             defaultValue: """
                 Usable token totals on \(tokenMeasuredAttempts) of \
                 \(tokenCoverageDenominator) finished attempts
-                """)
+                """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     // MARK: - Selection
@@ -992,11 +992,11 @@ enum UsageActivitySentence {
     static func unitNoun(_ unit: UsageActivityUnit) -> String {
         switch unit {
         case .day:
-            return String(localized: "settings.usage.chart.unit.day", defaultValue: "day")
+            return String(localized: "settings.usage.chart.unit.day", defaultValue: "day", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .week:
-            return String(localized: "settings.usage.chart.unit.week", defaultValue: "week")
+            return String(localized: "settings.usage.chart.unit.week", defaultValue: "week", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .month:
-            return String(localized: "settings.usage.chart.unit.month", defaultValue: "month")
+            return String(localized: "settings.usage.chart.unit.month", defaultValue: "month", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -1009,7 +1009,7 @@ enum UsageActivitySentence {
         unit: UsageActivityUnit,
         calendar: Calendar
     ) -> String {
-        let start = bucket.periodStart.formatted(date: .abbreviated, time: .omitted)
+        let start = bucket.periodStart.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: AppLocalization.locale))
         if bucket.startsMidPeriod, unit != .day {
             // The last day with any coverage, taken an instant inside the
             // exclusive end so a period ending at midnight names the day before
@@ -1017,18 +1017,18 @@ enum UsageActivitySentence {
             let lastCovered = calendar.startOfDay(
                 for: bucket.periodEnd.addingTimeInterval(-1))
             let end = max(lastCovered, bucket.periodStart)
-                .formatted(date: .abbreviated, time: .omitted)
+                .formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: AppLocalization.locale))
             return String(localized: "settings.usage.chart.period.span",
-                          defaultValue: "\(start) – \(end)")
+                          defaultValue: "\(start) – \(end)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         switch unit {
         case .day:
             return start
         case .week:
             return String(localized: "settings.usage.chart.period.week",
-                          defaultValue: "Week of \(start)")
+                          defaultValue: "Week of \(start)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .month:
-            return bucket.periodStart.formatted(.dateTime.month(.wide).year())
+            return bucket.periodStart.formatted(.dateTime.month(.wide).year().locale(AppLocalization.locale))
         }
     }
 
@@ -1038,13 +1038,13 @@ enum UsageActivitySentence {
         switch unit {
         case .day:
             return String(localized: "settings.usage.chart.soFar.day",
-                          defaultValue: "so far today")
+                          defaultValue: "so far today", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .week:
             return String(localized: "settings.usage.chart.soFar.week",
-                          defaultValue: "this week so far")
+                          defaultValue: "this week so far", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .month:
             return String(localized: "settings.usage.chart.soFar.month",
-                          defaultValue: "this month so far")
+                          defaultValue: "this month so far", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -1083,7 +1083,7 @@ enum UsageActivitySentence {
         // the period.
         guard bucket.attempts > 0 else {
             return [String(localized: "settings.usage.chart.selection.none",
-                           defaultValue: "no attempts")]
+                           defaultValue: "no attempts", bundle: AppLocalization.bundle, locale: AppLocalization.locale)]
         }
 
         switch metric {
@@ -1095,15 +1095,15 @@ enum UsageActivitySentence {
             // fragment where a headline belongs.
             guard bucket.tokenMeasuredAttempts > 0 else {
                 return [String(localized: "settings.usage.chart.selection.tokens.none",
-                               defaultValue: "no token data recorded")]
+                               defaultValue: "no token data recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)]
             }
             return [String(
                 localized: "settings.usage.chart.selection.tokens.v2",
-                defaultValue: "\(bucket.reportedTokens.formatted(.number)) tokens")]
+                defaultValue: "\(bucket.reportedTokens.formatted(.number.locale(AppLocalization.locale))) tokens", bundle: AppLocalization.bundle, locale: AppLocalization.locale)]
         case .models, .devices, .gateways:
             var parts = [String(
                 localized: "settings.usage.chart.clause.attempts",
-                defaultValue: "\(bucket.attempts) attempts")]
+                defaultValue: "\(bucket.attempts) attempts", bundle: AppLocalization.bundle, locale: AppLocalization.locale)]
             for segment in segments {
                 let count = segment.attempts(in: split)
                 guard count > 0 else { continue }
@@ -1120,13 +1120,13 @@ enum UsageActivitySentence {
         switch segment.role {
         case .named:
             return String(localized: "settings.usage.chart.segment.count",
-                          defaultValue: "\(count) \(segment.label)")
+                          defaultValue: "\(count) \(segment.label)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .other:
             return String(localized: "settings.usage.chart.segment.other.count",
-                          defaultValue: "\(count) other")
+                          defaultValue: "\(count) other", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .notRecorded:
             return String(localized: "settings.usage.chart.segment.notRecorded.count",
-                          defaultValue: "\(count) not recorded")
+                          defaultValue: "\(count) not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -1139,23 +1139,23 @@ enum UsageActivitySentence {
     private static func turnsBody(_ bucket: GatewayUsageActivityBucket) -> [String] {
         var parts = [String(
             localized: "settings.usage.chart.selection.turns.total",
-            defaultValue: "\(bucket.turns) turns")]
+            defaultValue: "\(bucket.turns) turns", bundle: AppLocalization.bundle, locale: AppLocalization.locale)]
         guard bucket.completedTurns > 0 || bucket.failedTurns > 0 else {
             parts.append(String(
                 localized: "settings.usage.chart.selection.turns.noneResolved",
-                defaultValue: "nothing completed or failed yet"))
+                defaultValue: "nothing completed or failed yet", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             return parts
         }
         parts.append(String(
             localized: "settings.usage.chart.selection.turns.completed",
-            defaultValue: "\(bucket.completedTurns) completed"))
+            defaultValue: "\(bucket.completedTurns) completed", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         parts.append(String(
             localized: "settings.usage.chart.selection.turns.failed",
-            defaultValue: "\(bucket.failedTurns) failed"))
+            defaultValue: "\(bucket.failedTurns) failed", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         if bucket.otherOutcomeTurns > 0 {
             parts.append(String(
                 localized: "settings.usage.chart.selection.turns.other",
-                defaultValue: "\(bucket.otherOutcomeTurns) with another outcome"))
+                defaultValue: "\(bucket.otherOutcomeTurns) with another outcome", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         return parts
     }
@@ -1181,11 +1181,11 @@ enum UsageActivitySentence {
             // rather than restating the sentence above it in attempt units.
             parts.append(String(
                 localized: "settings.usage.chart.clause.attempts",
-                defaultValue: "\(bucket.attempts) attempts"))
+                defaultValue: "\(bucket.attempts) attempts", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         } else {
             parts.append(String(
                 localized: "settings.usage.chart.clause.turns",
-                defaultValue: "\(bucket.turns) turns · \(bucket.attempts) attempts"))
+                defaultValue: "\(bucket.turns) turns · \(bucket.attempts) attempts", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             parts.append(resultsClause(bucket))
         }
         if metric != .tokens {
@@ -1197,13 +1197,13 @@ enum UsageActivitySentence {
     private static func resultsClause(_ bucket: GatewayUsageActivityBucket) -> String {
         guard bucket.resolvedAttempts > 0 else {
             return String(localized: "settings.usage.chart.clause.results.none",
-                          defaultValue: "nothing succeeded or failed")
+                          defaultValue: "nothing succeeded or failed", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return String(
             localized: "settings.usage.chart.clause.results",
             defaultValue: """
                 \(bucket.succeededAttempts) of \(bucket.resolvedAttempts) succeeded
-                """)
+                """, bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// THE ZERO-TOKEN LIE, FIXED. A period whose attempts reported nothing has
@@ -1218,13 +1218,13 @@ enum UsageActivitySentence {
     static func tokensClause(_ bucket: GatewayUsageActivityBucket) -> String {
         guard bucket.tokenMeasuredAttempts > 0 else {
             return String(localized: "settings.usage.chart.clause.tokens.none",
-                          defaultValue: "no token data")
+                          defaultValue: "no token data", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return String(
             localized: "settings.usage.chart.clause.tokens",
             defaultValue: """
-                \(bucket.reportedTokens.formatted(.number.notation(.compactName))) tokens
-                """)
+                \(bucket.reportedTokens.formatted(.number.notation(.compactName).locale(AppLocalization.locale))) tokens
+                """, bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 }
 
@@ -1334,7 +1334,7 @@ struct UsageActivityChartDescriptor: AXChartDescriptorRepresentable {
             title: valueName,
             range: 0...upper,
             gridlinePositions: [],
-            valueDescriptionProvider: { $0.formatted(.number.precision(.fractionLength(0))) }
+            valueDescriptionProvider: { $0.formatted(.number.precision(.fractionLength(0)).locale(AppLocalization.locale)) }
         )
     }
 }

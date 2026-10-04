@@ -4,6 +4,48 @@ import Foundation
 import Darwin
 import os
 
+#if CONDUCK_LOCALIZATION_EXTENSION
+// Extensions read only their host device's language preference. Keeping
+// this adapter here preserves the one raw-storage boundary without importing
+// the app graph, secrets or iCloud services into the widget extension.
+nonisolated enum AppLocalization {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var fallback = "en"
+    }
+    private static let state = State()
+    static func configure(language: String?) {
+        state.lock.lock()
+        state.fallback = ["en", "es", "zh-Hans", "ja"].contains(language ?? "") ? language! : "en"
+        state.lock.unlock()
+    }
+    static var identifier: String {
+        state.lock.lock()
+        defer { state.lock.unlock() }
+        #if CONDUCK_TESTING
+        return state.fallback
+        #else
+        guard let group = Bundle.main.object(forInfoDictionaryKey: "ConduckAppGroupID") as? String,
+              let defaults = UserDefaults(suiteName: group) else { return state.fallback }
+        defaults.synchronize()
+        guard let language = defaults.string(forKey: "app.language.selection.v1"),
+              ["en", "es", "zh-Hans", "ja"].contains(language) else { return state.fallback }
+        return language
+        #endif
+    }
+    static var locale: Locale { Locale(identifier: identifier) }
+    static var bundle: Bundle {
+        guard let path = Bundle.main.path(forResource: identifier, ofType: "lproj"),
+              let bundle = Bundle(path: path) else { return .main }
+        return bundle
+    }
+    static var resourceBundle: LocalizedStringResource.BundleDescription { .atURL(bundle.bundleURL) }
+
+    static func byteCount(_ bytes: Int64, style: ByteCountFormatStyle.Style = .file) -> String {
+        bytes.formatted(ByteCountFormatStyle(style: style, locale: locale))
+    }
+}
+#else
 // MARK: - Live adapters
 //
 // THE ONLY FILE PERMITTED to touch `UserDefaults(suiteName:)`,
@@ -303,4 +345,6 @@ extension WorkDeskBriefDraftFileStorage {
             .appendingPathComponent("WorkConversationDrafts", isDirectory: true))
     }
 }
+#endif
+
 #endif

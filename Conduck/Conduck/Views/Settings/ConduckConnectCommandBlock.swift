@@ -46,7 +46,7 @@ struct ConduckConnectCommandBlock: View {
                 Text(LocalizedStringResource(
                     "gateway.setupCommand.heroCaption",
                     defaultValue: "Downloads conduck-connect.sh from GitHub Releases, then runs it."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.footnote)
                 .foregroundStyle(AppColors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -90,8 +90,8 @@ struct ConduckConnectCommandBlock: View {
         } label: {
             Label(
                 didCopy
-                    ? LocalizedStringResource("gateway.setupCommand.copied", defaultValue: "Copied")
-                    : LocalizedStringResource("gateway.setupCommand.copyShort", defaultValue: "Copy"),
+                    ? LocalizedStringResource("gateway.setupCommand.copied", defaultValue: "Copied", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("gateway.setupCommand.copyShort", defaultValue: "Copy", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: didCopy ? "checkmark" : "doc.on.doc"
             )
             .onboardingScaledFont(.subheadline, weight: .semibold)
@@ -111,7 +111,7 @@ struct ConduckConnectCommandBlock: View {
                 Text(LocalizedStringResource(
                     "gateway.setupCommand.viewGitHub",
                     defaultValue: "View the script on GitHub"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 Image(systemName: "arrow.up.right")
                     .font(.caption)
             }

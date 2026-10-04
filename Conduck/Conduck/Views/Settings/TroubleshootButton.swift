@@ -37,7 +37,7 @@ struct TroubleshootButton: View {
             showingDiagnostics = true
         } label: {
             Label(
-                LocalizedStringResource("thread.troubleshoot", defaultValue: "Troubleshoot"),
+                LocalizedStringResource("thread.troubleshoot", defaultValue: "Troubleshoot", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "stethoscope"
             )
             .font(.caption.weight(.semibold))
@@ -56,7 +56,7 @@ struct TroubleshootButton: View {
                 )
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button(LocalizedStringResource("diagnostics.done", defaultValue: "Done")) {
+                        Button(LocalizedStringResource("diagnostics.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                             showingDiagnostics = false
                         }
                     }

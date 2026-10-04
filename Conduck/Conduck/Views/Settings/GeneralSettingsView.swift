@@ -31,6 +31,7 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            AppLanguageSettingsSection()
             startupSection
             quickCapturesSection
             ContentSyncSettingsSection()
@@ -38,7 +39,7 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
-        .navigationTitle(Text(LocalizedStringResource("settings.general.section.title", defaultValue: "General")))
+        .navigationTitle(Text(LocalizedStringResource("settings.general.section.title", defaultValue: "General", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showSetupGuide) {
             SetupGuideView()
@@ -94,27 +95,27 @@ struct GeneralSettingsView: View {
                 Text(LocalizedStringResource(
                     "settings.general.onLaunch.startNew",
                     defaultValue: "Start a new conversation"
-                )).tag(OnLaunchMode.startNewConversation)
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)).tag(OnLaunchMode.startNewConversation)
                 Text(LocalizedStringResource(
                     "settings.general.onLaunch.resumeLast",
                     defaultValue: "Resume last conversation"
-                )).tag(OnLaunchMode.resumeLastConversation)
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)).tag(OnLaunchMode.resumeLastConversation)
             } label: {
                 Text(LocalizedStringResource(
                     "settings.general.onLaunch.label",
                     defaultValue: "On launch"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textPrimary)
             }
             .pickerStyle(.menu)
             .tint(AppColors.brandAmber)
         } header: {
-            Text(LocalizedStringResource("settings.general.onLaunch.header", defaultValue: "Startup"))
+            Text(LocalizedStringResource("settings.general.onLaunch.header", defaultValue: "Startup", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.general.onLaunch.footer",
                 defaultValue: "What you see when you open Conduck."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -131,28 +132,28 @@ struct GeneralSettingsView: View {
                     Text(policy.label).tag(policy)
                 }
             } label: {
-                Text(LocalizedStringResource("settings.remoteAgent.sessionPolicy.label", defaultValue: "Add to last conversation"))
+                Text(LocalizedStringResource("settings.remoteAgent.sessionPolicy.label", defaultValue: "Add to last conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textPrimary)
             }
             .pickerStyle(.menu)
             .tint(AppColors.brandAmber)
         } header: {
             if DeviceCapabilities.isiPad {
-                Text(LocalizedStringResource("settings.quickCapture.header.ipad", defaultValue: "Control Center & Lock Screen"))
+                Text(LocalizedStringResource("settings.quickCapture.header.ipad", defaultValue: "Control Center & Lock Screen", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } else {
-                Text(LocalizedStringResource("settings.quickCapture.header.iphone", defaultValue: "Action Button & Control Center"))
+                Text(LocalizedStringResource("settings.quickCapture.header.iphone", defaultValue: "Action Button & Control Center", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         } footer: {
             if DeviceCapabilities.isiPad {
                 Text(LocalizedStringResource(
                     "settings.quickCapture.footer.ipad",
                     defaultValue: "Applies to asks from Control Center or the Lock Screen on this iPad. In-app messages use the conversation you have open."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } else {
                 Text(LocalizedStringResource(
                     "settings.quickCapture.footer.iphone",
                     defaultValue: "Applies to asks from the Action Button, Lock Screen, or Control Center on this iPhone. In-app messages use the conversation you have open."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }

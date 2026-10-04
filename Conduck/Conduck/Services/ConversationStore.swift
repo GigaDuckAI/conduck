@@ -1131,9 +1131,9 @@ nonisolated enum WorkProjectAccessError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .archived:
-            String(localized: "workdesk.error.projectArchived", defaultValue: "Restore this project before continuing its conversations or adding materials.")
+            String(localized: "workdesk.error.projectArchived", defaultValue: "Restore this project before continuing its conversations or adding materials.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .selectionRequired:
-            String(localized: "workdesk.pro.selection.otherDevice", defaultValue: "Choose your active projects in Work on iPhone, iPad or Mac to continue.")
+            String(localized: "workdesk.pro.selection.otherDevice", defaultValue: "Choose your active projects in Work on iPhone, iPad or Mac to continue.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }
@@ -3616,7 +3616,7 @@ actor ConversationStore {
                         return firstWithText.1
                     }
                     if userTurns.contains(where: { $0.2 }) {
-                        return String(localized: "[Image]")  // xcstrings: attachments
+                        return String(localized: "[Image]", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: attachments
                     }
                     return userTurns.first?.1
                 }()

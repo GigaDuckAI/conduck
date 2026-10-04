@@ -325,7 +325,7 @@ struct iOSMessageComposerBar: View {
                         Text(String(localized: LocalizedStringResource(
                             "recording.transcribing.slow.v2",
                             defaultValue: "Still working…"
-                        )))  // xcstrings: hardening
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))  // xcstrings: hardening
                         .font(.caption2)
                         .foregroundStyle(AppColors.textSecondary)
 
@@ -335,7 +335,7 @@ struct iOSMessageComposerBar: View {
                             Text(String(localized: LocalizedStringResource(
                                 "recording.transcribing.cancel",
                                 defaultValue: "Cancel"
-                            )))  // xcstrings: hardening
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))  // xcstrings: hardening
                             .font(.caption2.weight(.semibold))
                         }
                         .buttonStyle(.plain)
@@ -355,7 +355,7 @@ struct iOSMessageComposerBar: View {
                 // the user must act on (the interception warning, the server-side
                 // routes, the "your certificate is fine") in the remedy half alone.
                 let message = error.descriptionWithRecovery(for: viewModel?.boundRef)
-                Text(message.isEmpty ? String(localized: "Something went wrong.") : message)  // xcstrings
+                Text(message.isEmpty ? String(localized: "Something went wrong.", bundle: AppLocalization.bundle, locale: AppLocalization.locale) : message)  // xcstrings
                     .font(.caption)
                     .foregroundStyle(AppColors.error)
                     .multilineTextAlignment(.center)
@@ -472,7 +472,7 @@ struct iOSMessageComposerBar: View {
                 diameter: 36,
                 glyphSize: 15,
                 isDisabled: isSendDisabled || !showsSubduedSend,
-                accessibilityLabel: String(localized: LocalizedStringResource("composer.send", defaultValue: "Send")),
+                accessibilityLabel: String(localized: LocalizedStringResource("composer.send", defaultValue: "Send", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 action: sendTapped
             )
             .opacity(showsSubduedSend ? 1 : 0)
@@ -626,9 +626,9 @@ struct iOSMessageComposerBar: View {
     private func trailingAccessibilityLabel(for control: ComposerTrailingControl) -> String {
         switch control.glyph {
         case .stop where control.intent == .stop:
-            return String(localized: "Stop")  // xcstrings: chat-ui
+            return String(localized: "Stop", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         case .send:
-            return String(localized: LocalizedStringResource("composer.send", defaultValue: "Send"))
+            return String(localized: LocalizedStringResource("composer.send", defaultValue: "Send", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .stop, .mic, .working:
             return micAccessibilityLabel
         }
@@ -728,7 +728,7 @@ struct iOSMessageComposerBar: View {
             String(localized: LocalizedStringResource(
                 "composer.placeholder.v2",
                 defaultValue: "Message your AI"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             text: $draft,
             axis: .vertical
         )
@@ -740,7 +740,7 @@ struct iOSMessageComposerBar: View {
         .accessibilityLabel(LocalizedStringResource(
             "composer.placeholder.v2",
             defaultValue: "Message your AI"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         // Regular (iPad card) mode wraps the field in the elevated card already,
@@ -814,9 +814,9 @@ struct iOSMessageComposerBar: View {
     private var micAccessibilityLabel: String {
         switch recorder.state {
         case .recording:
-            return String(localized: LocalizedStringResource("composer.mic.stop", defaultValue: "Stop recording"))
+            return String(localized: LocalizedStringResource("composer.mic.stop", defaultValue: "Stop recording", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         default:
-            return String(localized: LocalizedStringResource("composer.mic.start", defaultValue: "Start recording"))
+            return String(localized: LocalizedStringResource("composer.mic.start", defaultValue: "Start recording", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -830,7 +830,7 @@ struct iOSMessageComposerBar: View {
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.recordingStarted",
                 defaultValue: "Recording started"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             Task {
                 // On-device default is keyboard dictation — no model download,
                 // no proactive gate. The rare "model not available for this
@@ -844,7 +844,7 @@ struct iOSMessageComposerBar: View {
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.transcribing",
                 defaultValue: "Transcribing"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             Task {
                 let result = await recorder.stopAndUpload()
                 await onVoiceResult(result)

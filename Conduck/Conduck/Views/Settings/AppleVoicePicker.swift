@@ -33,7 +33,7 @@ struct AppleVoiceSummaryRow: View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(LocalizedStringResource("settings.voice.apple.voice.row", defaultValue: "Voice"))
+                    Text(LocalizedStringResource("settings.voice.apple.voice.row", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .foregroundStyle(AppColors.textPrimary)
                     Spacer()
                     Text(summary)
@@ -47,7 +47,7 @@ struct AppleVoiceSummaryRow: View {
                         LocalizedStringResource(
                             "settings.voice.apple.voice.row.unavailable",
                             defaultValue: "Voice unavailable — using the system voice"
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "exclamationmark.triangle.fill"
                     )
                     .font(.caption)
@@ -66,10 +66,10 @@ struct AppleVoiceSummaryRow: View {
 
     private var summary: String {
         guard viewModel.appleVoicePickID != nil else {
-            return String(localized: "settings.voice.apple.voice.automatic", defaultValue: "Automatic")
+            return String(localized: "settings.voice.apple.voice.automatic", defaultValue: "Automatic", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         guard let voice = viewModel.appleVoicePick else {
-            return String(localized: "settings.voice.apple.voice.summary.missing", defaultValue: "Not installed")
+            return String(localized: "settings.voice.apple.voice.summary.missing", defaultValue: "Not installed", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return AppleVoiceLabels.summary(for: voice)
     }
@@ -96,11 +96,11 @@ struct AppleVoicePickerView: View {
             Section {
                 row(
                     id: Self.automaticRowID,
-                    title: String(localized: "settings.voice.apple.voice.automatic", defaultValue: "Automatic"),
+                    title: String(localized: "settings.voice.apple.voice.automatic", defaultValue: "Automatic", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     subtitle: String(
                         localized: "settings.voice.apple.voice.automatic.subtitle",
                         defaultValue: "Your device's default voice"
-                    ),
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     selected: viewModel.appleVoicePickID == nil,
                     unavailable: false
                 ) {
@@ -139,11 +139,11 @@ struct AppleVoicePickerView: View {
         }
         .scrollContentBackground(.hidden)
         #if os(iOS)
-        .navigationTitle(Text(LocalizedStringResource("settings.voice.apple.voice.title", defaultValue: "Voice")))
+        .navigationTitle(Text(LocalizedStringResource("settings.voice.apple.voice.title", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .navigationBarTitleDisplayMode(.inline)
         #else
         .macSettingsSubScreenChrome(
-            title: String(localized: "settings.voice.apple.voice.title", defaultValue: "Voice")
+            title: String(localized: "settings.voice.apple.voice.title", defaultValue: "Voice", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         )
         #endif
         .task { viewModel.refreshAppleVoices() }
@@ -200,7 +200,7 @@ struct AppleVoicePickerView: View {
                         .accessibilityLabel(Text(LocalizedStringResource(
                             "settings.voice.apple.voice.row.unavailable.a11y",
                             defaultValue: "Unavailable"
-                        )))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 }
             }
             .contentShape(Rectangle())
@@ -228,7 +228,7 @@ struct AppleVoicePickerView: View {
             Text(LocalizedStringResource(
                 "settings.voice.apple.voice.footer",
                 defaultValue: "Tap a voice to hear it. Your choice applies to replies in your device's language on this device."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
             .foregroundStyle(AppColors.textSecondary)
         }
@@ -239,12 +239,12 @@ struct AppleVoicePickerView: View {
         LocalizedStringResource(
             "settings.voice.apple.voice.download.mac",
             defaultValue: "For more natural voices, download Enhanced or Premium voices in System Settings → Accessibility → Read & Speak, using the info button next to System Voice. Siri voices aren't available to other apps."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #else
         LocalizedStringResource(
             "settings.voice.apple.voice.download.ios",
             defaultValue: "For more natural voices, download Enhanced or Premium voices in Settings → Accessibility → Read & Speak → Voices. Siri voices aren't available to other apps."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #endif
     }
 
@@ -277,12 +277,12 @@ enum AppleVoiceLabels {
             return String(
                 localized: "settings.voice.apple.voice.summary.premium",
                 defaultValue: "\(voice.name) (Premium)"
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .enhanced:
             return String(
                 localized: "settings.voice.apple.voice.summary.enhanced",
                 defaultValue: "\(voice.name) (Enhanced)"
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .standard:
             return voice.name
         }
@@ -291,17 +291,17 @@ enum AppleVoiceLabels {
     /// The voice's language in the user's own language ("English (United
     /// Kingdom)") — tells an en-GB user which voices are American.
     static func language(for voice: AppleVoiceDescriptor) -> String {
-        Locale.current.localizedString(forIdentifier: voice.language) ?? voice.language
+        AppLocalization.locale.localizedString(forIdentifier: voice.language) ?? voice.language
     }
 
     static func sectionTitle(for quality: AppleVoiceDescriptor.Quality) -> LocalizedStringResource {
         switch quality {
         case .premium:
-            return LocalizedStringResource("settings.voice.apple.voice.section.premium", defaultValue: "Premium")
+            return LocalizedStringResource("settings.voice.apple.voice.section.premium", defaultValue: "Premium", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .enhanced:
-            return LocalizedStringResource("settings.voice.apple.voice.section.enhanced", defaultValue: "Enhanced")
+            return LocalizedStringResource("settings.voice.apple.voice.section.enhanced", defaultValue: "Enhanced", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .standard:
-            return LocalizedStringResource("settings.voice.apple.voice.section.standard", defaultValue: "Standard")
+            return LocalizedStringResource("settings.voice.apple.voice.section.standard", defaultValue: "Standard", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }

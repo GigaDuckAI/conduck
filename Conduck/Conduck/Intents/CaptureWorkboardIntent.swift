@@ -20,17 +20,17 @@ import AppIntents
 import Foundation
 
 struct CaptureWorkboardIntent: AppIntent {
-    static var title: LocalizedStringResource = LocalizedStringResource(
+    static var title: LocalizedStringResource { LocalizedStringResource(
         "intent.workboardCapture.title",
         defaultValue: "Add to Work"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
-    static var description = IntentDescription(
+    static var description: IntentDescription { IntentDescription(
         LocalizedStringResource(
             "intent.workboardCapture.description",
             defaultValue: "Save a thought to your private Work desk without sending it to an AI."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     static var supportedModes: IntentModes = [.background]
 
@@ -38,7 +38,7 @@ struct CaptureWorkboardIntent: AppIntent {
         title: LocalizedStringResource(
             "intent.workboardCapture.thought",
             defaultValue: "What needs doing?"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     )
     var thought: String
 
@@ -65,7 +65,7 @@ struct CaptureWorkboardIntent: AppIntent {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty })
             .map { String($0.prefix(72)) }
-            ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled note")
+            ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled note", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Each run of the Shortcut is its own capture, so the material id is
         // minted here rather than derived from the text: two runs carrying the
@@ -88,7 +88,7 @@ struct CaptureWorkboardIntent: AppIntent {
         let confirmation = String(
             localized: "intent.workboardCapture.confirmation",
             defaultValue: "Added to Work. Nothing was sent."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         return .result(
             value: record.title,
             dialog: IntentDialog(stringLiteral: confirmation)
@@ -106,12 +106,12 @@ private enum CaptureWorkboardIntentError: LocalizedError {
             return String(
                 localized: "intent.workboardCapture.error.empty",
                 defaultValue: "Say or type what you want to prepare first."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .thoughtTooLong:
             return String(
                 localized: "intent.workboardCapture.error.tooLong",
                 defaultValue: "That’s too long to add to Work. Shorten it, then try again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }

@@ -9,7 +9,7 @@ struct WorkboardMaterialNotesIndicator: View {
     let material: WorkboardMaterialSnapshot
 
     static var title: LocalizedStringResource {
-        LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes")
+        LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     static func isVisible(for material: WorkboardMaterialSnapshot) -> Bool {

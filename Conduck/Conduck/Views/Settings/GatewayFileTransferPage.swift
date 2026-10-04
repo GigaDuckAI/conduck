@@ -50,22 +50,22 @@ extension GatewayFileLaneStatus {
     var shortLabel: LocalizedStringResource? {
         switch self {
         case .ready:
-            return LocalizedStringResource("fileTransfer.status.ready.short", defaultValue: "Server tested")
+            return LocalizedStringResource("fileTransfer.status.ready.short", defaultValue: "Server tested", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .readyUploadsOnly:
             return LocalizedStringResource(
-                "fileTransfer.status.uploadsOnly.short", defaultValue: "Uploads only")
+                "fileTransfer.status.uploadsOnly.short", defaultValue: "Uploads only", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .needsAttention:
-            return LocalizedStringResource("fileTransfer.status.needsAttention.short", defaultValue: "Needs attention")
+            return LocalizedStringResource("fileTransfer.status.needsAttention.short", defaultValue: "Needs attention", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .saved:
             // "Test required", not "not tested yet". A lane whose staged test FAILED
             // lands back in `.saved` (availability revoked) and, once the session's
             // result is gone, is indistinguishable from one nobody ever tested — so
             // the history claim is not knowable, while the remedy always is.
-            return LocalizedStringResource("fileTransfer.status.saved.short.v2", defaultValue: "Test required")
+            return LocalizedStringResource("fileTransfer.status.saved.short.v2", defaultValue: "Test required", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .recommended:
-            return LocalizedStringResource("fileTransfer.status.recommended.short", defaultValue: "Recommended")
+            return LocalizedStringResource("fileTransfer.status.recommended.short", defaultValue: "Recommended", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .optional:
-            return LocalizedStringResource("fileTransfer.status.optional.short", defaultValue: "Optional")
+            return LocalizedStringResource("fileTransfer.status.optional.short", defaultValue: "Optional", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .unsupported:
             return nil
         }
@@ -92,32 +92,32 @@ extension GatewayFileLaneStatus {
             return LocalizedStringResource(
                 "fileTransfer.status.ready.meaning",
                 defaultValue: "Conduck uploaded and retrieved a test file."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .readyUploadsOnly:
             return LocalizedStringResource(
                 "fileTransfer.status.uploadOnly.meaning",
                 defaultValue: "Conduck uploaded a test file and read it back. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .needsAttention:
             return LocalizedStringResource(
                 "fileTransfer.status.needsAttention.meaning",
                 defaultValue: "The last server test failed."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .saved:
             return LocalizedStringResource(
                 "fileTransfer.status.saved.meaning",
                 defaultValue: "The address and password are saved. Test the server before sending files."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .recommended:
             return LocalizedStringResource(
                 "fileTransfer.status.recommended.meaning",
                 defaultValue: "Set up a file server so this agent can work with files."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .optional:
             return LocalizedStringResource(
                 "fileTransfer.status.optional.meaning",
                 defaultValue: "Set this up only if you want this gateway to use files."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .unsupported:
             return nil
         }
@@ -132,34 +132,34 @@ extension GatewayFileLaneStatus {
             return LocalizedStringResource(
                 "fileTransfer.status.ready.title",
                 defaultValue: "File server tested"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .readyUploadsOnly:
             return LocalizedStringResource(
                 "fileTransfer.status.uploadOnly.title",
                 defaultValue: "File server tested — uploads only"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .needsAttention:
             return LocalizedStringResource(
                 "fileTransfer.status.needsAttention.title",
                 defaultValue: "Server test failed"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .saved:
             // Same reason as `shortLabel` — a failed test plus a relaunch derives
             // this state, so "not tested" is a claim the app cannot back.
             return LocalizedStringResource(
                 "fileTransfer.status.saved.title.v2",
                 defaultValue: "File server test required"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .recommended:
             return LocalizedStringResource(
                 "fileTransfer.status.recommended.title",
                 defaultValue: "Set up file transfer"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .optional:
             return LocalizedStringResource(
                 "fileTransfer.status.optional.title",
                 defaultValue: "File transfer not set up"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .unsupported:
             return nil
         }

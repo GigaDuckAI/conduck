@@ -62,7 +62,7 @@ nonisolated enum WatchWorkboardCaptureText {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty })
             .map { String($0.prefix(72)) }
-            ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled note")
+            ?? String(localized: "workboard.item.untitled", defaultValue: "Untitled note", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         return WatchWorkboardCapture(title: title, textContent: normalized)
     }
 }
@@ -105,22 +105,22 @@ enum WatchWorkTextRelayError: LocalizedError {
         switch self {
         case .connectionStarting:
             String(localized: "intent.workboardCapture.relay.starting",
-                   defaultValue: "Your Watch connection is still starting. Try again in a moment.")
+                   defaultValue: "Your Watch connection is still starting. Try again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .phoneUnavailable:
             String(localized: "intent.workboardCapture.relay.unavailable",
-                   defaultValue: "Your paired phone is unavailable. Open Conduck there, then try again, or turn on content sync in General settings.")
+                   defaultValue: "Your paired phone is unavailable. Open Conduck there, then try again, or turn on content sync in General settings.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unsupported:
             String(localized: "intent.workboardCapture.relay.unsupported",
-                   defaultValue: "Update Conduck on your paired phone to add this note while content sync is off.")
+                   defaultValue: "Update Conduck on your paired phone to add this note while content sync is off.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .refused:
             String(localized: "intent.workboardCapture.relay.refused",
-                   defaultValue: "Your paired phone couldn’t save this note. Open Conduck there and check available storage, then try again.")
+                   defaultValue: "Your paired phone couldn’t save this note. Open Conduck there and check available storage, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unconfirmed:
             String(localized: "intent.workboardCapture.relay.unconfirmed",
-                   defaultValue: "Couldn’t confirm that your paired phone saved the note. Check Work there before trying again.")
+                   defaultValue: "Couldn’t confirm that your paired phone saved the note. Check Work there before trying again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .tooLong:
             String(localized: "intent.workboardCapture.relay.tooLong",
-                   defaultValue: "This note is too long to send from your watch. Shorten it, then try again.")
+                   defaultValue: "This note is too long to send from your watch. Shorten it, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }
@@ -187,16 +187,16 @@ enum WatchWorkCaptureCompletion: Equatable {
     var confirmation: String {
         switch self {
         case .mirroredWatch:
-            String(localized: "intent.workboardCapture.confirmation", defaultValue: "Added to Work. Nothing was sent.")
+            String(localized: "intent.workboardCapture.confirmation", defaultValue: "Added to Work. Nothing was sent.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .phone:
             String(localized: "intent.workboardCapture.relay.confirmation",
-                   defaultValue: "Saved for Work on your paired phone. Open Conduck there to see it.")
+                   defaultValue: "Saved for Work on your paired phone. Open Conduck there to see it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .watchOnly:
             String(localized: "intent.workboardCapture.relay.retainedOnWatch",
-                   defaultValue: "Saved on your Watch. Turn on content sync in General settings to make it available on your other devices.")
+                   defaultValue: "Saved on your Watch. Turn on content sync in General settings to make it available on your other devices.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .watchAndUnconfirmedPhone:
             String(localized: "intent.workboardCapture.relay.retainedUnconfirmedPhone",
-                   defaultValue: "Saved on your Watch; it may also be on your paired phone. Turn on content sync in General settings to make the saved note available on your other devices.")
+                   defaultValue: "Saved on your Watch; it may also be on your paired phone. Turn on content sync in General settings to make the saved note available on your other devices.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }
@@ -211,12 +211,12 @@ nonisolated enum WatchWorkboardCaptureError: LocalizedError {
             return String(
                 localized: "intent.workboardCapture.error.empty",
                 defaultValue: "Say or type what you want to prepare first."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .thoughtTooLong:
             return String(
                 localized: "intent.workboardCapture.error.tooLong",
                 defaultValue: "That’s too long to add to Work. Shorten it, then try again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }
@@ -322,17 +322,17 @@ extension ConversationStore {
 }
 
 struct CaptureWorkboardIntent: AppIntent {
-    static var title: LocalizedStringResource = LocalizedStringResource(
+    static var title: LocalizedStringResource { LocalizedStringResource(
         "intent.workboardCapture.title",
         defaultValue: "Add to Work"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
-    static var description = IntentDescription(
+    static var description: IntentDescription { IntentDescription(
         LocalizedStringResource(
             "intent.workboardCapture.description",
             defaultValue: "Save a thought to your private Work desk without sending it to an AI."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     static var supportedModes: IntentModes = [.background]
 
@@ -340,7 +340,7 @@ struct CaptureWorkboardIntent: AppIntent {
         title: LocalizedStringResource(
             "intent.workboardCapture.thought",
             defaultValue: "What needs doing?"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     )
     var thought: String
 

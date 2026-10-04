@@ -79,8 +79,8 @@ struct WorkDeskWorkspaceView: View {
                     .id(conversation.id)
             } else {
                 VStack(spacing: 12) {
-                    Text(LocalizedStringResource("workdesk.conversation.unavailable", defaultValue: "This conversation couldn’t open."))
-                    Button(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project")) {
+                    Text(LocalizedStringResource("workdesk.conversation.unavailable", defaultValue: "This conversation couldn’t open.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
+                    Button(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         workspace.selectScope(workspace.scope)
                     }.buttonStyle(.bordered)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -150,10 +150,10 @@ struct WorkDeskWorkspaceView: View {
                             }
                         }
                     }
-                    .navigationTitle(Text(LocalizedStringResource("workdesk.projects", defaultValue: "Projects")))
+                    .navigationTitle(Text(LocalizedStringResource("workdesk.projects", defaultValue: "Projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button(LocalizedStringResource("common.done", defaultValue: "Done")) {
+                            Button(LocalizedStringResource("common.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                                 workspace.showsProjectPicker = false
                             }
                         }
@@ -175,12 +175,12 @@ struct WorkDeskWorkspaceView: View {
             // The picker is its own presenter on iPhone/compact iPad. A limit
             // reached here must appear above this sheet, keeping it open so
             // the person can archive a project and retry without losing scope.
-            .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk")),
+            .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                    isPresented: Binding(
                     get: { isActive && workspace.showsProjectPicker && workspace.organization.errorMessage != nil },
                     set: { if !$0 { workspace.organization.errorMessage = nil } }
                    )) {
-                Button(LocalizedStringResource("common.ok", defaultValue: "OK")) {
+                Button(LocalizedStringResource("common.ok", defaultValue: "OK", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     workspace.organization.errorMessage = nil
                 }
             } message: {
@@ -258,8 +258,8 @@ struct WorkDeskWorkspaceView: View {
                 )
             } else {
                 VStack(spacing: 16) {
-                    Text(LocalizedStringResource("workdesk.project.unavailable", defaultValue: "This project is no longer available."))
-                    Button(LocalizedStringResource("common.done", defaultValue: "Done")) { workspace.preparingProjectID = nil }
+                    Text(LocalizedStringResource("workdesk.project.unavailable", defaultValue: "This project is no longer available.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
+                    Button(LocalizedStringResource("common.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { workspace.preparingProjectID = nil }
                         .buttonStyle(.bordered)
                 }.padding(24)
             }
@@ -274,19 +274,19 @@ struct WorkDeskWorkspaceView: View {
             workspace.projectPreview.dismissOutside(value.location)
         })
         .background {
-            Button(LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file")) {
+            Button(LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 workspace.requestSearch()
             }
             .keyboardShortcut("f", modifiers: .command)
             .disabled(!isActive)
             .hidden()
         }
-        .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk")),
+        .alert(Text(LocalizedStringResource("workdesk.update.failed", defaultValue: "Couldn’t update the desk", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                isPresented: Binding(
                 get: { isActive && !workspace.showsProjectPicker && workspace.organization.errorMessage != nil && workspace.projectPreview.request == nil && workspace.projectEditor == nil && workspace.preparingProjectID == nil && workspace.projectDeletionReview == nil },
                 set: { if !$0 { workspace.organization.errorMessage = nil } }
                )) {
-            Button(LocalizedStringResource("common.ok", defaultValue: "OK")) {
+            Button(LocalizedStringResource("common.ok", defaultValue: "OK", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 workspace.organization.errorMessage = nil
             }
         } message: {
@@ -304,18 +304,18 @@ struct WorkDeskWorkspaceView: View {
             if workspace.organization.canPresentFreeProjectSelection {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(workspace.organization.hasExpiredSubscription
-                        ? LocalizedStringResource("workdesk.pro.expired.message", defaultValue: "Your Pro subscription ended. Choose which projects stay active on the free plan.")
-                        : LocalizedStringResource("workdesk.pro.selection.message", defaultValue: "Choose which projects stay active on the free plan. All your materials and conversations remain available."))
+                        ? LocalizedStringResource("workdesk.pro.expired.message", defaultValue: "Your Pro subscription ended. Choose which projects stay active on the free plan.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("workdesk.pro.selection.message", defaultValue: "Choose which projects stay active on the free plan. All your materials and conversations remain available.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption).foregroundStyle(AppColors.textSecondary)
                     Spacer(minLength: 0)
-                    Button(LocalizedStringResource("workdesk.pro.chooseProjects", defaultValue: "Choose projects")) {
+                    Button(LocalizedStringResource("workdesk.pro.chooseProjects", defaultValue: "Choose projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         workspace.organization.projectSelectionRequested = true
                     }.inlineLinkButton()
                 }.padding(.vertical, 6)
             }
             if let project = workspace.currentProject, project.isArchived, !workspace.isSearching {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(LocalizedStringResource("workdesk.project.archived.message", defaultValue: "Archived. Restore this project to add materials or start a new conversation."))
+                    Text(LocalizedStringResource("workdesk.project.archived.message", defaultValue: "Archived. Restore this project to add materials or start a new conversation.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption).foregroundStyle(AppColors.textSecondary)
                     Spacer(minLength: 0)
                     WorkDeskProjectArchiveButton(project: project, organization: workspace.organization)
@@ -333,7 +333,7 @@ struct WorkDeskWorkspaceView: View {
             if let error = workspace.conversationLoadError {
                 HStack {
                     Text(verbatim: error).font(.caption)
-                    Button(LocalizedStringResource("common.retry", defaultValue: "Try again")) {
+                    Button(LocalizedStringResource("common.retry", defaultValue: "Try again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         Task { await workspace.reloadProjectActivity() }
                     }.inlineLinkButton()
                 }.foregroundStyle(AppColors.textSecondary)
@@ -367,17 +367,17 @@ struct WorkDeskWorkspaceView: View {
                     withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) { workspace.toggleProjectNavigation() }
                 } label: { Image(systemName: "sidebar.left").frame(width: 40, height: 40) }
                 .pointerIconButton(size: 40)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.projects.browse", defaultValue: "Browse projects")))
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.projects.browse", defaultValue: "Browse projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
             if showsConversationBackNavigation {
                 Button { workspace.selectScope(workspace.scope) } label: {
-                    Label { Text(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project")).lineLimit(1) } icon: { Image(systemName: "chevron.left") }
+                    Label { Text(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)).lineLimit(1) } icon: { Image(systemName: "chevron.left") }
                         .font(.headline).padding(.vertical, 8)
                 }.inlineLinkButton()
-                .accessibilityHint(Text(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project")))
+                .accessibilityHint(Text(LocalizedStringResource("workdesk.conversation.back", defaultValue: "Back to project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             } else if showsHomeNavigation {
                 Button { workspace.selectScope(.all) } label: {
-                    Label(LocalizedStringResource("workdesk.all", defaultValue: "Home"), systemImage: "chevron.left")
+                    Label(LocalizedStringResource("workdesk.all", defaultValue: "Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "chevron.left")
                         .font(.subheadline.weight(.medium))
                         .padding(.horizontal, 4).frame(minHeight: 44)
                 }
@@ -388,7 +388,7 @@ struct WorkDeskWorkspaceView: View {
                 Button { workspace.search = ""; workspace.searchIsFocused = false } label: {
                     Image(systemName: "xmark").frame(width: 40, height: 40)
                 }.pointerIconButton(size: 40)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.search.clear", defaultValue: "Clear search")))
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.search.clear", defaultValue: "Clear search", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
         }
     }
@@ -397,7 +397,7 @@ struct WorkDeskWorkspaceView: View {
         Button {
             workspace.beginConversation(resolver: effectiveConversationResolver)
         } label: {
-            Text(LocalizedStringResource("workdesk.conversation.new", defaultValue: "New conversation…"))
+            Text(LocalizedStringResource("workdesk.conversation.new", defaultValue: "New conversation…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.center)
@@ -467,7 +467,7 @@ struct WorkDeskWorkspaceView: View {
     private var selectionControls: some View {
         HStack(spacing: 8) {
             if workspace.isSelecting {
-                Button(LocalizedStringResource("workdesk.select.all", defaultValue: "Select all")) {
+                Button(LocalizedStringResource("workdesk.select.all", defaultValue: "Select all", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     workspace.selectedIDs = Set(workspace.visibleMaterials(in: item.materials).map(\.id))
                 }
                 .buttonStyle(.bordered)
@@ -478,8 +478,8 @@ struct WorkDeskWorkspaceView: View {
                 if !workspace.isSelecting { workspace.selectedIDs = [] }
             } label: {
                 Text(workspace.isSelecting
-                    ? LocalizedStringResource("common.done", defaultValue: "Done")
-                    : LocalizedStringResource("workdesk.select", defaultValue: "Select"))
+                    ? LocalizedStringResource("common.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("workdesk.select", defaultValue: "Select", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .fixedSize()
                     .padding(.horizontal, 10)
@@ -494,7 +494,7 @@ struct WorkDeskWorkspaceView: View {
     private var selectionBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
-                Text(LocalizedStringResource("workdesk.selected.count", defaultValue: "\(workspace.selectedIDs.count) selected"))
+                Text(LocalizedStringResource("workdesk.selected.count", defaultValue: "\(workspace.selectedIDs.count) selected", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption.monospacedDigit())
                 if workspace.currentProjectAllowsNewActivity && !workspace.isSearching {
                     Button(WorkDeskMaterialConversationCopy.title(count: workspace.selectedIDs.count),
@@ -506,13 +506,13 @@ struct WorkDeskWorkspaceView: View {
                     .disabled(workspace.selectedIDs.isEmpty)
                     .accessibilityIdentifier("workdesk-selection-new-conversation")
                 } else if workspace.scope == .all && !workspace.isSearching {
-                    Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project"), systemImage: "folder.badge.plus") {
+                    Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder.badge.plus") {
                         workspace.beginProject(materialIDs: workspace.visibleMaterials(in: item.materials).map(\.id).filter { workspace.selectedIDs.contains($0) })
                     }.buttonStyle(.bordered).disabled(workspace.selectedIDs.isEmpty)
                 }
                 Menu {
                     if !workspace.isSearching, workspace.currentProject != nil {
-                        Button(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home")) {
+                        Button(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                             Task { await workspace.assignSelection(to: nil, materials: item.materials) }
                         }
                     }
@@ -522,8 +522,8 @@ struct WorkDeskWorkspaceView: View {
                     }
                 } label: {
                     Label(workspace.isSearching
-                        ? LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…")
-                        : LocalizedStringResource("workdesk.move", defaultValue: "Move to"), systemImage: "folder")
+                        ? LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("workdesk.move", defaultValue: "Move to", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder")
                 }
                 .buttonStyle(.bordered)
                 .disabled(workspace.organization.activeProjects.isEmpty && !workspace.selectedIDs.contains(where: { workspace.organization.projectID(for: $0) != nil }))
@@ -540,7 +540,7 @@ struct WorkDeskWorkspaceView: View {
                             } label: { Text(verbatim: project.title) }
                         }
                     } label: {
-                        Label(LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…"),
+                        Label(LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                               systemImage: "folder.badge.plus")
                     }
                     .buttonStyle(.bordered)
@@ -572,16 +572,16 @@ private struct WorkDeskProjectEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Text(request.project == nil
-                        ? LocalizedStringResource("workdesk.project.new", defaultValue: "New project")
-                        : LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"))
+                        ? LocalizedStringResource("workdesk.project.new", defaultValue: "New project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.title2.weight(.semibold))
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(LocalizedStringResource("workdesk.project.name", defaultValue: "Project name"))
+                        Text(LocalizedStringResource("workdesk.project.name", defaultValue: "Project name", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline.weight(.medium))
                         TextField(text: $title) {
-                            Text(LocalizedStringResource("workdesk.project.name", defaultValue: "Project name"))
+                            Text(LocalizedStringResource("workdesk.project.name", defaultValue: "Project name", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         }
                         .textFieldStyle(.plain)
                         .padding(.horizontal, 12)
@@ -599,7 +599,7 @@ private struct WorkDeskProjectEditor: View {
                         .accessibilityIdentifier("workdesk-project-name")
                     }
                     if request.project == nil {
-                        Text(LocalizedStringResource("workdesk.project.create.explanation", defaultValue: "A home for related ideas, files and the brief you’ll shape from them."))
+                        Text(LocalizedStringResource("workdesk.project.create.explanation", defaultValue: "A home for related ideas, files and the brief you’ll shape from them.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.callout)
                             .foregroundStyle(AppColors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -624,7 +624,7 @@ private struct WorkDeskProjectEditor: View {
             HStack(spacing: 12) {
                 Spacer(minLength: 0)
                 Button { dismiss() } label: {
-                    Text(LocalizedStringResource("common.cancel", defaultValue: "Cancel"))
+                    Text(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.body.weight(.medium))
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)
@@ -635,7 +635,7 @@ private struct WorkDeskProjectEditor: View {
                 .keyboardShortcut(.cancelAction)
                 .disabled(isSaving)
                 Button { save() } label: {
-                    Text(LocalizedStringResource("common.save", defaultValue: "Save"))
+                    Text(LocalizedStringResource("common.save", defaultValue: "Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 18)

@@ -123,7 +123,7 @@ final class WorkDeskWorkspaceState {
             do { try workspace.draftStore.deleteProjects(deletedProjectIDs) }
             catch {
                 workspace.organization.errorMessage = String(localized: "workdesk.draft.clearFailed",
-                    defaultValue: "This draft couldn’t be removed from this device. Try again.")
+                    defaultValue: "This draft couldn’t be removed from this device. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             for id in deletedProjectIDs {
                 workspace.briefDrafts.removeValue(forKey: id)
@@ -377,7 +377,7 @@ final class WorkDeskWorkspaceState {
             pruneConversationModels()
         } catch {
             guard generation == conversationReloadGeneration else { return }
-            conversationLoadError = String(localized: "workdesk.conversations.loadFailed", defaultValue: "Conversations couldn’t refresh. Try again.")
+            conversationLoadError = String(localized: "workdesk.conversations.loadFailed", defaultValue: "Conversations couldn’t refresh. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -434,7 +434,7 @@ final class WorkDeskWorkspaceState {
 
     func gatewayName(for conversation: ConversationRecord) -> String {
         guard let ref = RemoteAgentRef(rawString: conversation.backend) else {
-            return String(localized: "workdesk.conversation.connectionMissing", defaultValue: "Connection unavailable")
+            return String(localized: "workdesk.conversation.connectionMissing", defaultValue: "Connection unavailable", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return RemoteAgentRefMetadata.displayName(for: ref, customs: conversationSettings.customGateways)
     }
@@ -574,7 +574,7 @@ final class WorkDeskWorkspaceState {
         let available = Set(visibleMaterials(in: materials).map(\.id))
         guard materialIDs.isSubset(of: available) else {
             organization.errorMessage = String(localized: "workdesk.conversation.selectionChanged",
-                defaultValue: "The selected materials changed. Choose them again.")
+                defaultValue: "The selected materials changed. Choose them again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return false
         }
         if let existing = briefDrafts[project.id],

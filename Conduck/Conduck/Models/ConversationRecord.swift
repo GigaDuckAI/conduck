@@ -277,7 +277,7 @@ struct ConversationRecord: Identifiable, Hashable, Sendable {
         if let snippet = Self.projectedTitleRung(titleSnippet) {
             return snippet
         }
-        return String(localized: "New conversation")  // xcstrings
+        return String(localized: "New conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
     }
 
     /// One rung of the `displayTitle` ladder: an untrusted stored string reduced

@@ -208,7 +208,7 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
             // First audio is signalled from the synth's `didStart` delegate —
             // real proof, not the old optimistic fire (the on-device synth
             // starts near-instantly, so the template flip is not delayed).
-            speakFixed(String(localized: "Done."), onFirstAudio: onFirstAudio, completion: completion)  // xcstrings: existing key
+            speakFixed(String(localized: "Done.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), onFirstAudio: onFirstAudio, completion: completion)  // xcstrings: existing key
             return
         }
 
@@ -277,7 +277,7 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
 
     // MARK: - Voice selection
 
-    /// The CarPlay fallback voice = the system DEFAULT voice for the current
+    /// The fixed CarPlay guidance voice uses the selected app language, with the system
     /// language. We deliberately do NOT scan `speechVoices()` for the
     /// highest-`quality` voice: that list keeps reporting enhanced/premium
     /// voices that were downloaded once and later removed (common after an iOS
@@ -287,7 +287,7 @@ final class CarPlaySpeechService: NSObject, AVSpeechSynthesizerDelegate {
     /// (`AppleVoice.swift`) is not applied to these fixed acks — see the type
     /// doc. Mirrors `SpeechPlayer.selectVoice` + `WatchReplySpeaker`.
     private static func selectVoice() -> AVSpeechSynthesisVoice? {
-        AVSpeechSynthesisVoice(language: AVSpeechSynthesisVoice.currentLanguageCode())
+        AVSpeechSynthesisVoice(language: AppLocalization.language == .chinese ? "zh-CN" : AppLocalization.language.rawValue)
     }
 
     // MARK: - AVSpeechSynthesizerDelegate

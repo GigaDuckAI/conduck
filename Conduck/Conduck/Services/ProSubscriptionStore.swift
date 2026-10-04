@@ -194,10 +194,10 @@ final class ProSubscriptionStore {
                       let period = candidate.subscription?.subscriptionPeriod else { return false }
                 return period.value == 1 && period.unit == .month
             }
-            if product == nil { message = String(localized: "pro.store.unavailable", defaultValue: "Subscriptions are unavailable right now. Please try again later.") }
+            if product == nil { message = String(localized: "pro.store.unavailable", defaultValue: "Subscriptions are unavailable right now. Please try again later.", bundle: AppLocalization.bundle, locale: AppLocalization.locale) }
         } catch {
             product = nil
-            message = String(localized: "pro.store.unavailable", defaultValue: "Subscriptions are unavailable right now. Please try again later.")
+            message = String(localized: "pro.store.unavailable", defaultValue: "Subscriptions are unavailable right now. Please try again later.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -211,13 +211,13 @@ final class ProSubscriptionStore {
             let didVerifyAccess = await refreshAndWaitUntilApplied()
             if !hasProAccess {
                 message = didVerifyAccess
-                    ? String(localized: "pro.restore.none", defaultValue: "No active Conduck Pro subscription was found for this Apple Account.")
-                    : String(localized: "pro.restore.unavailable", defaultValue: "Your subscription could not be checked. Please try again.")
+                    ? String(localized: "pro.restore.none", defaultValue: "No active Conduck Pro subscription was found for this Apple Account.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                    : String(localized: "pro.restore.unavailable", defaultValue: "Your subscription could not be checked. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
         } catch StoreKitError.userCancelled {
             // Cancellation returns to the offer without an error accusation.
         } catch {
-            message = String(localized: "pro.restore.failed", defaultValue: "Purchases could not be restored. Please try again.")
+            message = String(localized: "pro.restore.failed", defaultValue: "Purchases could not be restored. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -229,22 +229,22 @@ final class ProSubscriptionStore {
             guard case .verified(let transaction) = verification,
                   transaction.productID == configuration.productID,
                   transaction.productType == .autoRenewable else {
-                message = String(localized: "pro.purchase.unverified", defaultValue: "Apple could not verify this purchase. Try Restore Purchases before purchasing again.")
+                message = String(localized: "pro.purchase.unverified", defaultValue: "Apple could not verify this purchase. Try Restore Purchases before purchasing again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 return
             }
             purchaseIsPending = false
             await refreshAndWaitUntilApplied()
             await transaction.finish()
             if !hasProAccess {
-                message = String(localized: "pro.purchase.checking", defaultValue: "Your purchase is being checked. Try Restore Purchases if access does not appear.")
+                message = String(localized: "pro.purchase.checking", defaultValue: "Your purchase is being checked. Try Restore Purchases if access does not appear.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
         case .success(.pending):
             purchaseIsPending = true
-            message = String(localized: "pro.purchase.pending", defaultValue: "Your purchase is awaiting approval. Pro will become available when Apple confirms it.")
+            message = String(localized: "pro.purchase.pending", defaultValue: "Your purchase is awaiting approval. Pro will become available when Apple confirms it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .success(.userCancelled): break
         case .failure(let error):
             if case StoreKitError.userCancelled = error { return }
-            message = String(localized: "pro.purchase.failed", defaultValue: "The purchase could not be completed. Please try again.")
+            message = String(localized: "pro.purchase.failed", defaultValue: "The purchase could not be completed. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         @unknown default: break
         }
     }

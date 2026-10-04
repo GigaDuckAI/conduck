@@ -120,17 +120,17 @@ final class CloudSyncMonitor {
                 return LocalizedStringResource(
                     "sync.icloud.banner.noAccount",
                     defaultValue: "iCloud is signed out — your conversations won't sync across your devices."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .restricted:
                 return LocalizedStringResource(
                     "sync.icloud.banner.restricted",
                     defaultValue: "iCloud is restricted on this device — your conversations can't sync."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .quotaExceeded:
                 return LocalizedStringResource(
                     "sync.icloud.banner.quota",
                     defaultValue: "Your iCloud storage is full — new conversations can't sync to your other devices."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             }
         }
 
@@ -141,17 +141,17 @@ final class CloudSyncMonitor {
                 return LocalizedStringResource(
                     "sync.icloud.settings.content.noAccount",
                     defaultValue: "Sign in to iCloud in Settings to sync conversations, Work and files across your devices."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .restricted:
                 return LocalizedStringResource(
                     "sync.icloud.settings.content.restricted",
                     defaultValue: "iCloud is restricted on this device, so conversations, Work and files can't sync."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .quotaExceeded:
                 return LocalizedStringResource(
                     "sync.icloud.settings.quota",
                     defaultValue: "Your iCloud storage is full. Free up space or upgrade your plan to resume syncing."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             }
         }
     }

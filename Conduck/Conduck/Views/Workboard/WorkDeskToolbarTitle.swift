@@ -18,12 +18,12 @@ struct WorkDeskToolbarTitle: View {
 
     private var title: String {
         if workspace.isSearching {
-            return String(localized: LocalizedStringResource("workdesk.search.results", defaultValue: "Search results"))
+            return String(localized: LocalizedStringResource("workdesk.search.results", defaultValue: "Search results", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         if let project = workspace.currentProject {
             return project.title
         }
-        return String(localized: LocalizedStringResource("workdesk.all", defaultValue: "Home"))
+        return String(localized: LocalizedStringResource("workdesk.all", defaultValue: "Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     private var maximumWidth: CGFloat {
@@ -66,17 +66,17 @@ struct WorkDeskToolbarTitle: View {
                                 }
                             }
                         } label: {
-                            Label(LocalizedStringResource("workdesk.project.conversations", defaultValue: "Conversations"),
+                            Label(LocalizedStringResource("workdesk.project.conversations", defaultValue: "Conversations", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                                   systemImage: "bubble.left.and.bubble.right")
                         }
                     }
                     Divider()
-                    Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
+                    Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "pencil") {
                         workspace.editProject(project)
                     }
                     WorkDeskProjectColorMenu(project: project, organization: workspace.organization)
                     WorkDeskProjectArchiveButton(project: project, organization: workspace.organization)
-                    Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
+                    Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "trash") {
                         workspace.requestProjectDeletion(project.id)
                     }
                 } label: {
@@ -87,7 +87,7 @@ struct WorkDeskToolbarTitle: View {
                 .pointerIconButton(shape: .capsule)
                 #endif
                 .accessibilityLabel(Text(verbatim: title))
-                .accessibilityHint(Text(LocalizedStringResource("workdesk.project.actions", defaultValue: "Project actions")))
+                .accessibilityHint(Text(LocalizedStringResource("workdesk.project.actions", defaultValue: "Project actions", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             } else {
                 pill(showsChevron: false)
                     .accessibilityAddTraits(.isHeader)
@@ -136,12 +136,12 @@ struct WorkDeskToolbarTitle: View {
                     gatewayLabel(model.backendDisplayName, presenceRef: presenceRef, interactive: true)
                 }
                 .pointerIconButton(shape: .capsule)
-                .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway"))
+                .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     + Text(verbatim: ": " + model.backendDisplayName))
                 #if os(iOS)
                 .gatewayPresenceAccessibilityValue(for: presenceRef)
                 #endif
-                .help(String(localized: LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
+                .help(String(localized: LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .accessibilityIdentifier("toolbar.cloneGateway")
             } else {
                 gatewayLabel(model.backendDisplayName, presenceRef: presenceRef, interactive: false)

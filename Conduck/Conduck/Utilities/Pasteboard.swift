@@ -57,10 +57,10 @@ enum Pasteboard {
     /// and no shell metacharacters. `PasteboardExpiryPlaceholderTests` asserts
     /// all three, which is why this sits OUTSIDE the AppKit `#if`: the test
     /// target runs on the iOS Simulator.
-    static let expiredPlaceholder = String(
+    static var expiredPlaceholder: String { String(
         localized: "pasteboard.expired.placeholder",
         defaultValue: "Conduck expired this clipboard copy - copy it again in Conduck"
-    )
+    , bundle: AppLocalization.bundle, locale: AppLocalization.locale) }
 
     /// Copy a SENSITIVE string (e.g. the gateway setup code, which embeds a
     /// full-access bearer token) with a bounded system-clipboard lifetime.

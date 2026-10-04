@@ -190,7 +190,7 @@ extension DefaultGatewayNotice {
         needsChoice
             ? String(localized: LocalizedStringResource(
                 "settings.personalAI.default.notChosen",
-                defaultValue: "Not chosen yet"))
+                defaultValue: "Not chosen yet", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             : displayName
     }
 }

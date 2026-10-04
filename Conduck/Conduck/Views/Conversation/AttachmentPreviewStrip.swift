@@ -146,7 +146,7 @@ struct AttachmentPreviewStrip: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.imageTile",
             defaultValue: "Attached image"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     // MARK: - Loading tile
@@ -170,7 +170,7 @@ struct AttachmentPreviewStrip: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.loadingTile",
             defaultValue: "Loading attachment"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     // MARK: - Failed tile
@@ -191,7 +191,7 @@ struct AttachmentPreviewStrip: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.failedTile",
             defaultValue: "Attachment failed to load"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     // MARK: - File chip
@@ -233,7 +233,7 @@ struct AttachmentPreviewStrip: View {
             format: String(localized: LocalizedStringResource(
                 "composer.attach.fileChip",
                 defaultValue: "Attached file %@"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             name
         )))
     }
@@ -280,7 +280,7 @@ struct AttachmentPreviewStrip: View {
             format: String(localized: LocalizedStringResource(
                 "composer.attach.fileChip",
                 defaultValue: "Attached file %@"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             filename
         )))
     }
@@ -351,7 +351,7 @@ struct AttachmentPreviewStrip: View {
                 format: String(localized: LocalizedStringResource(
                     "fileTransfer.attach.serverTile",
                     defaultValue: "Attached file %@ for your file server"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 originalName
             ),
             refusalDetail
@@ -375,14 +375,14 @@ struct AttachmentPreviewStrip: View {
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "fileTransfer.attach.uploading",
                     defaultValue: "Uploading to your file server"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .failed:
             Button {
                 onRetryUpload(id)
             } label: {
                 HStack(spacing: 3) {
                     Image(systemName: "exclamationmark.arrow.circlepath")
-                    Text(LocalizedStringResource("fileTransfer.attach.retry", defaultValue: "Retry"))
+                    Text(LocalizedStringResource("fileTransfer.attach.retry", defaultValue: "Retry", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(AppColors.error)
@@ -391,7 +391,7 @@ struct AttachmentPreviewStrip: View {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "fileTransfer.attach.retry",
                 defaultValue: "Retry"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .refused(let reason, _):
             // The refusal's OWN words, not a strip-local paraphrase — the tile is
             // narrow, so this shows the CAUSE only and still truncates, but
@@ -418,7 +418,7 @@ struct AttachmentPreviewStrip: View {
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "fileTransfer.attach.uploaded",
                     defaultValue: "Uploaded to your file server"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
     }
 
@@ -449,7 +449,7 @@ struct AttachmentPreviewStrip: View {
                 Text(LocalizedStringResource(
                     "fileTransfer.needsSetup.sublabel",
                     defaultValue: "Needs file transfer"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.warning)
                 Button {
@@ -458,7 +458,7 @@ struct AttachmentPreviewStrip: View {
                     Text(LocalizedStringResource(
                         "fileTransfer.needsSetup.setUp",
                         defaultValue: "Set Up"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(AppColors.brandAmber)
                 }
@@ -466,7 +466,7 @@ struct AttachmentPreviewStrip: View {
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "fileTransfer.needsSetup.setUp.a11y",
                     defaultValue: "Set up file transfer"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
         }
         .padding(.horizontal, 10)
@@ -482,7 +482,7 @@ struct AttachmentPreviewStrip: View {
             format: String(localized: LocalizedStringResource(
                 "fileTransfer.needsSetup.tile.a11y",
                 defaultValue: "File %@ needs file transfer set up"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             originalName
         )))
     }
@@ -509,7 +509,7 @@ struct AttachmentPreviewStrip: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.remove",
             defaultValue: "Remove attachment"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     // MARK: - Helpers

@@ -55,7 +55,7 @@ struct WorkDeskProjectFolder: View {
             }
             .choiceCardButton(cornerRadius: 12)
             .accessibilityLabel(Text(verbatim: project.record.title))
-            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
+            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .accessibilityIdentifier("workdesk-project-open-\(project.id.uuidString)")
             previewButton
         }
@@ -129,7 +129,7 @@ struct WorkDeskProjectFolder: View {
             }
             .choiceCardButton(cornerRadius: 14)
             .accessibilityLabel(Text(verbatim: project.record.title))
-            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project")))
+            .accessibilityHint(Text(LocalizedStringResource("workdesk.canvas.openProject", defaultValue: "Open project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .accessibilityIdentifier("workdesk-project-open-\(project.id.uuidString)")
             previewButton
         }
@@ -162,11 +162,11 @@ struct WorkDeskProjectFolder: View {
             #endif
         }
         .pointerIconButton(size: 44)
-        .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.preview.action", defaultValue: "Preview contents"))
+        .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.preview.action", defaultValue: "Preview contents", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             + Text(verbatim: ": " + project.record.title))
         .accessibilityValue(Text(WorkDeskCopy.materialCount(project.materialCount)) + Text(verbatim: ", ")
-            + Text(isPreviewing ? LocalizedStringResource("workdesk.expanded", defaultValue: "Expanded")
-                : LocalizedStringResource("workdesk.collapsed", defaultValue: "Collapsed")))
+            + Text(isPreviewing ? LocalizedStringResource("workdesk.expanded", defaultValue: "Expanded", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                : LocalizedStringResource("workdesk.collapsed", defaultValue: "Collapsed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .accessibilityIdentifier("workdesk-project-preview-\(project.id.uuidString)")
     }
 }

@@ -462,7 +462,7 @@ struct ContentView: View {
         return String(localized: LocalizedStringResource(
             "chat.title.unconfigured",
             defaultValue: "Conduck"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The ref whose presence the toolbar dot reports: inside a thread the bound
@@ -518,7 +518,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
+            .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .accessibilityIdentifier("toolbar.cloneGateway")
             .gatewayPresenceAccessibilityValue(for: presenceRef)   // the muted dot's state, as this element's value
         } else {
@@ -685,18 +685,18 @@ struct ContentView: View {
                 Text(String(localized: LocalizedStringResource(
                     "send.error.mintFailed.title",
                     defaultValue: "Couldn't start the conversation"
-                ))),  // xcstrings: hardening
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))),  // xcstrings: hardening
                 isPresented: $showSendFailedAlert
             ) {
                 Button(String(localized: LocalizedStringResource(
                     "send.error.mintFailed.ok",
                     defaultValue: "OK"
-                )), role: .cancel) {}  // xcstrings: hardening
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), role: .cancel) {}  // xcstrings: hardening
             } message: {
                 Text(String(localized: LocalizedStringResource(
                     "send.error.mintFailed.message",
                     defaultValue: "Your message is back in the composer — try sending again."
-                )))  // xcstrings: hardening
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))  // xcstrings: hardening
             }
             // The principal toolbar item below always owns the centered title
             // control (`gatewayTitleControl`: picker / clone-tappable title /
@@ -1517,7 +1517,7 @@ struct ContentView: View {
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.transcriptAdded",
                 defaultValue: "Transcript added"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             await refreshPendingRetryState()
         case .failure(let error):
             await refreshPendingRetryState()
@@ -1815,7 +1815,7 @@ struct ContentView: View {
         String(
             localized: "pendingRetry.card.busy",
             defaultValue: "This recording is already being finished. Try again in a moment."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// True when the desk ALREADY holds what this capture produced, so the
@@ -1946,7 +1946,7 @@ struct ContentView: View {
         case .ready(let key):
             apiKey = key
         case .notConfigured:
-            presentRetryError(String(localized: "No STT API key set. Open Settings to add one."))  // xcstrings
+            presentRetryError(String(localized: "No STT API key set. Open Settings to add one.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings
             return false
         case .unreadable:
             // Re-keyed and surfaced exactly as the STT `catch` below does it, so
@@ -1992,7 +1992,7 @@ struct ContentView: View {
         do {
             try pending.audioData.write(to: retryAudioURL, options: [.atomic])
         } catch {
-            presentRetryError(String(localized: "Couldn't send — try again in a minute."))  // xcstrings
+            presentRetryError(String(localized: "Couldn't send — try again in a minute.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings
             return false
         }
 
@@ -2015,7 +2015,7 @@ struct ContentView: View {
 
             let recoveredTranscript = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !recoveredTranscript.isEmpty else {
-                presentRetryError(String(localized: "Transcription returned empty text. Try again."))  // xcstrings
+                presentRetryError(String(localized: "Transcription returned empty text. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings
                 return false
             }
 
@@ -2066,7 +2066,7 @@ struct ContentView: View {
             pendingRetryIsRetryable = error.isRetryable
             let message = error.descriptionWithRecovery(for: detailVM?.boundRef ?? pickerSelectedRef)
             presentRetryError(
-                message.isEmpty ? String(localized: "Couldn't send — try again in a minute.") : message,  // xcstrings
+                message.isEmpty ? String(localized: "Couldn't send — try again in a minute.", bundle: AppLocalization.bundle, locale: AppLocalization.locale) : message,  // xcstrings
                 sticky: !error.isRetryable
             )
         } catch {
@@ -2074,9 +2074,9 @@ struct ContentView: View {
                 presentRetryError(String(
                     localized: "workboard.capture.retry.voice.message",
                     defaultValue: "Couldn't add this recording to Work. Try again."
-                ))
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             } else {
-                presentRetryError(String(localized: "Couldn't send — try again in a minute."))  // xcstrings
+                presentRetryError(String(localized: "Couldn't send — try again in a minute.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings
             }
         }
         return false
@@ -2195,7 +2195,7 @@ struct ContentView: View {
                 presentRetryError(String(
                     localized: "workboard.capture.retry.voice.message",
                     defaultValue: "Couldn't add this recording to Work. Try again."
-                ))
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                 return false
             }
             // The card is on the desk either way, so a clear this reservation
@@ -2211,7 +2211,7 @@ struct ContentView: View {
             presentRetryError(String(
                 localized: "workboard.capture.retry.voice.message",
                 defaultValue: "Couldn't add this recording to Work. Try again."
-            ))
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             return false
         }
     }

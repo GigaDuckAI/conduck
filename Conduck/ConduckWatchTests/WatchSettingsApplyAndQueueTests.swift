@@ -46,6 +46,23 @@ final class WatchSettingsApplyAndQueueTests: XCTestCase {
         super.tearDown()
     }
 
+    func testAppLanguageInheritsFromPhoneWithoutCredentialsAndRejectsDelayedDelivery() async throws {
+        let watchDefaults = InMemoryDefaultsStore()
+        let language = AppLanguageStore(defaults: watchDefaults)
+        let manager = WatchSessionManager(appLanguageStore: language)
+        let source = UUID().uuidString
+        await manager.applyEnvelopePayload([
+            AppLanguageStore.watchMessageKey: ["language": "ja", "revision": 20.0, "source": source]
+        ])
+        XCTAssertEqual(language.language, .japanese)
+        await manager.applyEnvelopePayload([
+            AppLanguageStore.watchMessageKey: ["language": "es", "revision": 19.0, "source": source]
+        ])
+        await manager.applyEnvelopePayload([:])
+        XCTAssertEqual(language.language, .japanese)
+        XCTAssertEqual(AppLanguageStore(defaults: watchDefaults).language, .japanese)
+    }
+
     // MARK: - iPhone→Watch settings APPLY contract (+ monotonic stale guard)
 
     func testContentSyncPreferenceSurvivesLegacyAndOutOfOrderSettingsDeliveries() async throws {

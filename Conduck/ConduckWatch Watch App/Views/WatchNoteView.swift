@@ -177,7 +177,7 @@ struct WatchNoteView: View {
                     showDestinationChooser = false
                     // xcstrings
                     recordingService.state = .error(
-                        message: String(localized: "Conduck is turned off for Apple Watch. Enable it in iPhone Settings.")
+                        message: String(localized: "Conduck is turned off for Apple Watch. Enable it in iPhone Settings.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     )
 
                 case .directStart, .pushAndStart:
@@ -220,7 +220,7 @@ struct WatchNoteView: View {
                 showDestinationChooser = false
                 // xcstrings
                 recordingService.state = .error(
-                    message: String(localized: "Conduck is turned off for Apple Watch. Enable it in iPhone Settings.")
+                    message: String(localized: "Conduck is turned off for Apple Watch. Enable it in iPhone Settings.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
 
             case .directStart:
@@ -487,7 +487,7 @@ struct WatchNoteView: View {
                                 Text(String(localized: LocalizedStringResource(
                                     "watch.work.capture.saving",
                                     defaultValue: "Saving to Work…"
-                                )))
+                                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                             } else {
                                 Text("Still answering your last question.")  // xcstrings
                             }
@@ -523,7 +523,7 @@ struct WatchNoteView: View {
             String(localized: LocalizedStringResource(
                 "watch.ask.destination.title",
                 defaultValue: "Where to?"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             isPresented: $showDestinationChooser,
             titleVisibility: .visible
         ) {
@@ -542,7 +542,7 @@ struct WatchNoteView: View {
                     Button(String(localized: LocalizedStringResource(
                         "watch.ask.destination.work",
                         defaultValue: "Add to Work"
-                    ))) {
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))) {
                         beginWorkCapture()
                     }
                 }
@@ -552,7 +552,7 @@ struct WatchNoteView: View {
                 Text(String(localized: LocalizedStringResource(
                     "watch.ask.destination.noAI",
                     defaultValue: "No personal AI available."
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
         }
         // The switch is read at DRAW time, and this sheet outlives the draw:
@@ -593,7 +593,7 @@ struct WatchNoteView: View {
                     Label(String(localized: LocalizedStringResource(
                         "watch.error.dismiss",
                         defaultValue: "Dismiss"
-                    )), systemImage: "xmark")  // xcstrings: hardening
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), systemImage: "xmark")  // xcstrings: hardening
                         .font(.caption)
                 }
             }

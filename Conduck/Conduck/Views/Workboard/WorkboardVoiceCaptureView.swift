@@ -82,7 +82,7 @@ struct WorkboardVoiceCaptureView: View {
             .workboardInlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         cancel()
                     }
                 }
@@ -147,7 +147,7 @@ struct WorkboardVoiceCaptureView: View {
                     Text(LocalizedStringResource(
                         "workboard.voice.stopped.title",
                         defaultValue: "Transcription stopped"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.title3.weight(.semibold))
                     // ONE sentence, because there is one state to describe. A
                     // stopped transcription has put nothing on the desk — this
@@ -158,7 +158,7 @@ struct WorkboardVoiceCaptureView: View {
                     Text(LocalizedStringResource(
                         "workboard.voice.stopped.body",
                         defaultValue: "Your recording is still on this device. Try Again turns it into a note on your desk."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     // The refusal changes no state, so without this the only
@@ -169,7 +169,7 @@ struct WorkboardVoiceCaptureView: View {
                         Text(LocalizedStringResource(
                             "pendingRetry.card.busy",
                             defaultValue: "This recording is already being finished. Try again in a moment."
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.footnote)
                         .foregroundStyle(AppColors.warning)
                     }
@@ -177,13 +177,13 @@ struct WorkboardVoiceCaptureView: View {
                     Text(LocalizedStringResource(
                         "workboard.voice.starting",
                         defaultValue: "Starting the microphone…"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             case .recording(let startedAt):
                 Text(LocalizedStringResource(
                     "workboard.voice.listening",
                     defaultValue: "Listening"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.title2.weight(.semibold))
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     let elapsed = max(0, min(
@@ -201,12 +201,12 @@ struct WorkboardVoiceCaptureView: View {
                             .accessibilityLabel(Text(LocalizedStringResource(
                                 "workboard.voice.elapsed",
                                 defaultValue: "Recording time"
-                            )))
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                             .accessibilityValue(Text(verbatim: Self.elapsed(elapsed)))
                         Text(LocalizedStringResource(
                             "recording.oneMinuteLeft",
                             defaultValue: "1 min left"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(AppColors.warning)
                         .opacity(isNearCap ? 1 : 0)
@@ -217,13 +217,13 @@ struct WorkboardVoiceCaptureView: View {
                 Text(LocalizedStringResource(
                     "workboard.voice.transcribing",
                     defaultValue: "Turning speech into text…"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.title3.weight(.semibold))
             case .preparingVoice(let progress):
                 Text(LocalizedStringResource(
                     "workboard.voice.preparing",
                     defaultValue: "Preparing on-device voice…"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.title3.weight(.semibold))
                 if let progress {
                     ProgressView(value: progress)
@@ -234,7 +234,7 @@ struct WorkboardVoiceCaptureView: View {
                 Text(LocalizedStringResource(
                     "workboard.voice.error.title",
                     defaultValue: "Voice capture stopped"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.title3.weight(.semibold))
                 Text(verbatim: error.localizedDescription)
                     .font(.subheadline)
@@ -250,7 +250,7 @@ struct WorkboardVoiceCaptureView: View {
                     Text(LocalizedStringResource(
                         "pendingRetry.card.busy",
                         defaultValue: "This recording is already being finished. Try again in a moment."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.footnote)
                     .foregroundStyle(AppColors.warning)
                     .multilineTextAlignment(.center)
@@ -269,7 +269,7 @@ struct WorkboardVoiceCaptureView: View {
                 Task { handle(await recorder.stopAndUpload()) }
             } label: {
                 Label(
-                    LocalizedStringResource("workboard.voice.stop", defaultValue: "Stop and Save"),
+                    LocalizedStringResource("workboard.voice.stop", defaultValue: "Stop and Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "stop.fill"
                 )
                 .font(.headline)
@@ -296,7 +296,7 @@ struct WorkboardVoiceCaptureView: View {
                     }
                 } label: {
                     Label(
-                        LocalizedStringResource("workboard.voice.tryAgain", defaultValue: "Try Again"),
+                        LocalizedStringResource("workboard.voice.tryAgain", defaultValue: "Try Again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "arrow.counterclockwise"
                     )
                     .font(.headline)
@@ -313,7 +313,7 @@ struct WorkboardVoiceCaptureView: View {
                             LocalizedStringResource(
                                 "workboard.voice.recordAgain",
                                 defaultValue: "Record Again"
-                            ),
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             systemImage: "mic.fill"
                         )
                         .frame(maxWidth: .infinity, minHeight: 44)
@@ -321,7 +321,7 @@ struct WorkboardVoiceCaptureView: View {
                     .buttonStyle(.bordered)
                 }
             } else {
-                Button(LocalizedStringResource("common.close", defaultValue: "Close")) {
+                Button(LocalizedStringResource("common.close", defaultValue: "Close", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     cancel()
                 }
                 .buttonStyle(.borderedProminent)
@@ -331,7 +331,7 @@ struct WorkboardVoiceCaptureView: View {
             Button(LocalizedStringResource(
                 "workboard.voice.cancelTranscription",
                 defaultValue: "Cancel Transcription"
-            )) {
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 recorder.cancelProcessing()
             }
             .buttonStyle(.bordered)
@@ -355,7 +355,7 @@ struct WorkboardVoiceCaptureView: View {
                     Task { handle(await recorder.retryWorkCapture()) }
                 } label: {
                     Label(
-                        LocalizedStringResource("workboard.voice.tryAgain", defaultValue: "Try Again"),
+                        LocalizedStringResource("workboard.voice.tryAgain", defaultValue: "Try Again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "arrow.counterclockwise"
                     )
                     .font(.headline)
@@ -363,7 +363,7 @@ struct WorkboardVoiceCaptureView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(AppColors.brandAmber)
-                Button(LocalizedStringResource("common.done", defaultValue: "Done")) {
+                Button(LocalizedStringResource("common.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     cancel()
                 }
                 .buttonStyle(.bordered)
@@ -394,7 +394,7 @@ struct WorkboardVoiceCaptureView: View {
             LocalizedStringResource(
                 "workboard.voice.privacy",
                 defaultValue: "Your recording stays on this device while it becomes words, and the words go to your private desk. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation, and never through a server of ours."
-            ),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             systemImage: "lock.shield"
         )
         .font(.caption)
@@ -440,7 +440,7 @@ struct WorkboardVoiceCaptureView: View {
             return String(
                 localized: "pendingRetry.card.busy",
                 defaultValue: "This recording is already being finished. Try again in a moment."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         switch recorder.state {
         case .idle:
@@ -448,21 +448,21 @@ struct WorkboardVoiceCaptureView: View {
                 return String(
                     localized: "workboard.voice.stopped.title",
                     defaultValue: "Transcription stopped"
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "workboard.voice.starting", defaultValue: "Starting the microphone…")
+            return String(localized: "workboard.voice.starting", defaultValue: "Starting the microphone…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .recording:
-            return String(localized: "workboard.voice.listening", defaultValue: "Listening")
+            return String(localized: "workboard.voice.listening", defaultValue: "Listening", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .processing:
-            return String(localized: "workboard.voice.transcribing", defaultValue: "Turning speech into text…")
+            return String(localized: "workboard.voice.transcribing", defaultValue: "Turning speech into text…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .preparingVoice:
-            return String(localized: "workboard.voice.preparing", defaultValue: "Preparing on-device voice…")
+            return String(localized: "workboard.voice.preparing", defaultValue: "Preparing on-device voice…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .error(let error):
             return String.localizedStringWithFormat(
                 String(
                     localized: "workboard.voice.error.accessibility",
                     defaultValue: "Voice capture stopped. %@"
-                ),
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 error.localizedDescription
             )
         }

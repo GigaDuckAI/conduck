@@ -61,7 +61,7 @@ struct AdvancedModelDisclosure: View {
     var helper: LocalizedStringResource = LocalizedStringResource(
         "settings.stt.provider.modelOverride.helper",
         defaultValue: "Leave empty for the recommended default. A wrong value fails at the next transcription."
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
 
     // MARK: - Optional voice field (TTS only) — nil-defaulted
     //
@@ -84,7 +84,7 @@ struct AdvancedModelDisclosure: View {
     var voiceHelper: LocalizedStringResource = LocalizedStringResource(
         "settings.voice.tts.voice.helper",
         defaultValue: "Leave empty for the default. Voice IDs are provider-specific (e.g. en_paul_neutral)."
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
 
     /// Collapsed by default — the override is an advanced, rarely-touched field.
     @State private var expanded: Bool = false
@@ -143,11 +143,11 @@ struct AdvancedModelDisclosure: View {
     private var disclosureLabel: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(LocalizedStringResource("settings.stt.provider.modelOverride.label",
-                                         defaultValue: "Advanced"))
+                                         defaultValue: "Advanced", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             Text(LocalizedStringResource("settings.stt.provider.modelOverride.labelHint",
-                                         defaultValue: "Use a different model"))
+                                         defaultValue: "Use a different model", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -161,7 +161,7 @@ struct AdvancedModelDisclosure: View {
             // caller supplies the full voice trio. Withheld (nil-default) for
             // the STT direction, which has no voice override.
             if let voicePlaceholder, let pendingVoice, let onSaveVoice {
-                Text(LocalizedStringResource("settings.tts.custom.voice.label", defaultValue: "Voice"))
+                Text(LocalizedStringResource("settings.tts.custom.voice.label", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
                 TextField("", text: pendingVoice, prompt: Text(voicePlaceholder))
@@ -196,7 +196,7 @@ struct AdvancedModelDisclosure: View {
             } label: {
                 Label(
                     LocalizedStringResource("settings.stt.provider.modelOverride.save",
-                                            defaultValue: "Save model"),
+                                            defaultValue: "Save model", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "checkmark"
                 )
                 .font(.subheadline.weight(.semibold))

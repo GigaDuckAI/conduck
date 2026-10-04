@@ -385,11 +385,11 @@ extension SettingsViewModel {
                 ? String(
                     localized: "settings.voice.tts.preview.error.keyMissing",
                     defaultValue: "No API key for this provider is available on this device yet — paste it in the key field, or wait for iCloud Keychain to finish syncing."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 : String(
                     localized: "settings.voice.tts.preview.error.keyUnreadable",
                     defaultValue: "The key couldn't be read from the Keychain right now — unlock the device and try again."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             // Forensic ring: the preflight failure (previewSample is never called,
             // so it records nothing here — this is the ONE external record site).
             TTSOutcomeLog.shared.record(
@@ -584,11 +584,11 @@ extension SettingsViewModel {
                 ? String(
                     localized: "settings.voice.tts.preview.error.keyUnreadable",
                     defaultValue: "The key couldn't be read from the Keychain right now — unlock the device and try again."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 : String(
                     localized: "settings.voice.tts.preview.error.keyMissing",
                     defaultValue: "No API key for this provider is available on this device yet — paste it in the key field, or wait for iCloud Keychain to finish syncing."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             ttsPreviewStates[providerID] = .invalid(message: message)
             return
         }
@@ -642,27 +642,27 @@ extension SettingsViewModel {
             return String(
                 localized: "settings.voice.tts.preview.error.unreachable",
                 defaultValue: "Couldn't reach the voice provider — check your connection."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsUnauthorized:
             return String(
                 localized: "settings.voice.tts.preview.error.unauthorized",
                 defaultValue: "This provider rejected the key for text-to-speech — check the key's permissions (ElevenLabs keys need a text-to-speech scope)."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsRateLimited:
             return String(
                 localized: "settings.voice.tts.preview.error.rateLimited",
                 defaultValue: "This provider is rate-limited or out of quota — top up the account's credit, or try again shortly."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsContentBlocked:
             return String(
                 localized: "settings.voice.tts.preview.error.contentBlocked",
                 defaultValue: "The provider's safety filter blocked this text — try different wording."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsCustomEndpointNotConfigured:
             return String(
                 localized: "settings.voice.tts.preview.error.endpointNotConfigured",
                 defaultValue: "Set your custom endpoint URL first (in the Speech-to-Text section above)."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsCustomCertMismatch:
             // The shared refusal + remedy, verbatim. The preview is one of the
             // few places a mismatch surfaces, so it carries the whole verdict —
@@ -687,7 +687,7 @@ extension SettingsViewModel {
             return String(
                 localized: "settings.voice.tts.preview.error.synthesis",
                 defaultValue: "Couldn't synthesize — check the voice name or ID for this provider."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 

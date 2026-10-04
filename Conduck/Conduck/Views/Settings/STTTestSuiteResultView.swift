@@ -94,13 +94,13 @@ struct STTTestSuiteResultView: View {
         switch stage {
         case .reachability:
             return LocalizedStringResource("stt.test.stage.reachability",
-                                           defaultValue: "Reachability & TLS")
+                                           defaultValue: "Reachability & TLS", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .auth:
             return LocalizedStringResource("stt.test.stage.auth",
-                                           defaultValue: "Authentication")
+                                           defaultValue: "Authentication", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .transcription:
             return LocalizedStringResource("stt.test.stage.transcription",
-                                           defaultValue: "Transcription")
+                                           defaultValue: "Transcription", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -130,7 +130,7 @@ struct STTTestSuiteResultView: View {
 
     private func transcriptCard(_ transcript: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(LocalizedStringResource("stt.test.heard.label", defaultValue: "Heard:"))
+            Text(LocalizedStringResource("stt.test.heard.label", defaultValue: "Heard:", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppColors.textSecondary)
             Text(transcript)
@@ -145,7 +145,7 @@ struct STTTestSuiteResultView: View {
                 )
             Text(String(
                 format: String(localized: "stt.test.expected.label",
-                               defaultValue: "Expected: %@"),
+                               defaultValue: "Expected: %@", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 STTConnectionTestSuite.expectedPhrase
             ))
                 .font(.caption2)
@@ -162,7 +162,7 @@ struct STTTestSuiteResultView: View {
                 .foregroundStyle(AppColors.textTertiary)
             Text(String(
                 format: String(localized: "stt.test.latency.label",
-                               defaultValue: "Round-trip: %lld ms"),
+                               defaultValue: "Round-trip: %lld ms", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 latencyMS
             ))
                 .font(.caption)

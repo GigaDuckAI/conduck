@@ -28,7 +28,7 @@ struct RecommendedModelLine: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(LocalizedStringResource("settings.stt.provider.recommendedModel", defaultValue: "Recommended model"))
+            Text(LocalizedStringResource("settings.stt.provider.recommendedModel", defaultValue: "Recommended model", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
             if let model, !model.isEmpty {

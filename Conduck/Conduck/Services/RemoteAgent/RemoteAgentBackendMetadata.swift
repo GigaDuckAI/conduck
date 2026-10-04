@@ -327,11 +327,11 @@ enum RemoteAgentBackendRegistry {
                 healthBody: LocalizedStringResource(
                     "gateway.credentialSource.openclaw.healthBody",
                     defaultValue: "To check the server is alive at all, open this route in a browser — it answers even when the AI endpoint is switched off:"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 tokenBody: LocalizedStringResource(
                     "gateway.credentialSource.openclaw.tokenBody",
                     defaultValue: "OpenClaw generated a token for you when you installed it — you don't have to invent one. Open this file on your server and copy the value stored under this key — the real secret, and if it shows a ${…} placeholder, paste the value it points to, not the placeholder:"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 caveats: [
                     // The trap `conduck-connect` calls out explicitly: the compose
                     // `.env` value is only an onboarding SEED and can drift from the
@@ -340,13 +340,13 @@ enum RemoteAgentBackendRegistry {
                     LocalizedStringResource(
                         "gateway.credentialSource.openclaw.caveat.envSeed",
                         defaultValue: "Don't copy the token from the Docker .env file — that value is only a setup seed and can drift. Use gateway.auth.token in openclaw.json."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 ]
             ),
             endpointDisabledRemedy: LocalizedStringResource(
                 "gateway.endpointDisabled.openclaw",
                 defaultValue: "OpenClaw ships with its OpenAI chat endpoint switched OFF. Turn on gateway.http.endpoints.chatCompletions.enabled on your server, then restart the gateway."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         ),
         RemoteAgentBackendMetadata(
             id: .hermes,
@@ -374,22 +374,22 @@ enum RemoteAgentBackendRegistry {
                 healthBody: LocalizedStringResource(
                     "gateway.credentialSource.hermes.healthBody",
                     defaultValue: "To check the server is alive at all, open this route in a browser. If this route doesn't answer, the API server itself is off — see the note below:"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 tokenBody: LocalizedStringResource(
                     "gateway.credentialSource.hermes.tokenBody",
                     defaultValue: "Hermes does not generate a token — you choose it yourself. Open this file on your server and copy the value stored under this key; if the key isn't there, add it with a long random value of your own and restart Hermes."
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 caveats: [
                     LocalizedStringResource(
                         "gateway.credentialSource.hermes.caveat.apiServer",
                         defaultValue: "Hermes's setup wizard does NOT turn its API server on. Set API_SERVER_ENABLED=true in the same file, then restart Hermes."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 ]
             ),
             endpointDisabledRemedy: LocalizedStringResource(
                 "gateway.endpointDisabled.hermes",
                 defaultValue: "Hermes ships with its OpenAI API server switched OFF. Set API_SERVER_ENABLED=true in ~/.hermes/.env, then restart Hermes."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         ),
         RemoteAgentBackendMetadata(
             id: .openrouter,

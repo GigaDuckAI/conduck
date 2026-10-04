@@ -508,11 +508,11 @@ enum STTConnectionTestSuite {
 
     private static var timeoutReason: String {
         String(localized: "stt.test.reachability.timeout",
-                defaultValue: "Timed out reaching the server.")
+                defaultValue: "Timed out reaching the server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var unreachableReason: String {
         String(localized: "stt.test.reachability.unreachable",
-                defaultValue: "Couldn't reach the server.")
+                defaultValue: "Couldn't reach the server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     // Internal for the same reason as `untrustedCertReason` below, and the
     // shared copy for the same reason: a mismatch reaches this stage only when
@@ -540,64 +540,64 @@ enum STTConnectionTestSuite {
     private static var insecureBlockedReason: String {
         AppError.insecureConnectionBlocked.recoverySuggestion
             ?? String(localized: "remoteAgent.error.insecureBlocked.recovery.v2",
-                      defaultValue: "Plain http:// only reaches an address on your own network. Use the server's IP address or its .local name, or put it behind https://.")
+                      defaultValue: "Plain http:// only reaches an address on your own network. Use the server's IP address or its .local name, or put it behind https://.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var invalidResponseReason: String {
         String(localized: "stt.test.reachability.invalidResponse",
-                defaultValue: "Server returned an unexpected response.")
+                defaultValue: "Server returned an unexpected response.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     // `.v2` key: the original wording blamed reachability, which is now only one
     // of the ways stage ① ends (a rejected certificate is the other) — and the
     // catalog value WINS over `defaultValue:`, so the reword needs a fresh key.
     private static var blockedByReachabilityReason: String {
         String(localized: "stt.test.skipped.blockedByReachability.v2",
-                defaultValue: "Skipped — the connection to the server didn't complete.")
+                defaultValue: "Skipped — the connection to the server didn't complete.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var blockedByAuthReason: String {
         String(localized: "stt.test.skipped.blockedByAuth",
-                defaultValue: "Skipped — authentication failed.")
+                defaultValue: "Skipped — authentication failed.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var authFailedReason: String {
         String(localized: "stt.test.auth.failed",
-                defaultValue: "The server rejected the key (401/403).")
+                defaultValue: "The server rejected the key (401/403).", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var serverErrorReason: String {
         String(localized: "stt.test.transcription.serverError",
-                defaultValue: "The server hit an error (5xx). Check its logs.")
+                defaultValue: "The server hit an error (5xx). Check its logs.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var rejectedReason: String {
         String(localized: "stt.test.transcription.rejected",
-                defaultValue: "The server rejected the clip — check the model name and audio format.")
+                defaultValue: "The server rejected the clip — check the model name and audio format.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var undecodableReason: String {
         String(localized: "stt.test.transcription.undecodable",
-                defaultValue: "Couldn't read the server's response — it isn't OpenAI-compatible.")
+                defaultValue: "Couldn't read the server's response — it isn't OpenAI-compatible.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     // Internal (not private) so the suite's tests can assert the EXACT reason
     // for a 200-empty (vs the undecodable verdict) — guards the regression where
     // a decoder throw was mis-mapped to "isn't OpenAI-compatible".
     static var emptyTranscriptReason: String {
         String(localized: "stt.test.transcription.empty",
-                defaultValue: "The server answered but returned no transcript.")
+                defaultValue: "The server answered but returned no transcript.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var assetMissingReason: String {
         String(localized: "stt.test.assetMissing",
-                defaultValue: "The bundled test clip is missing from the app.")
+                defaultValue: "The bundled test clip is missing from the app.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var tlsOKDetail: String {
         String(localized: "stt.test.reachability.ok",
-                defaultValue: "Connected — TLS OK")
+                defaultValue: "Connected — TLS OK", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var authOKDetail: String {
         String(localized: "stt.test.auth.ok",
-                defaultValue: "Key accepted")
+                defaultValue: "Key accepted", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var transcriptMatchDetail: String {
         String(localized: "stt.test.transcription.match",
-                defaultValue: "Heard the test phrase")
+                defaultValue: "Heard the test phrase", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
     private static var transcriptSoftPassDetail: String {
         String(localized: "stt.test.transcription.softPass",
-                defaultValue: "Got a transcript (didn't exactly match the phrase)")
+                defaultValue: "Got a transcript (didn't exactly match the phrase)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 }

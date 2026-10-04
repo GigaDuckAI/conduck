@@ -63,11 +63,11 @@ import Network
 /// Throws when the capture would dead-end, so the bundled Shortcut bails before
 /// `Record Audio` opens the mic UI.
 struct CheckNetworkIntent: AppIntent {
-    static var title: LocalizedStringResource = "Check Conduck Is Ready"      // xcstrings
+    static var title: LocalizedStringResource { LocalizedStringResource("Check Conduck Is Ready", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }      // xcstrings
 
-    static var description: IntentDescription = IntentDescription(
-        LocalizedStringResource("Checks your connection and your default AI before recording, so nothing you say is wasted.")  // xcstrings
-    )
+    static var description: IntentDescription { IntentDescription(
+        LocalizedStringResource("Checks your connection and your default AI before recording, so nothing you say is wasted.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)  // xcstrings
+    ) }
 
     /// Runs headlessly by default, and may ask to continue in the foreground
     /// when the fix needs a screen. `IntentModes` is an OptionSet — membership,
@@ -110,7 +110,7 @@ struct CheckNetworkIntent: AppIntent {
                 throw await refuse(
                     .remoteAgentDefaultNeedsSetup(gatewayName: name),
                     // xcstrings
-                    dialog: String(localized: "Your default AI, \(name), isn't available on this device. Open Conduck to pick a different one?")
+                    dialog: String(localized: "Your default AI, \(name), isn't available on this device. Open Conduck to pick a different one?", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
             case .selectionRequired:
                 // Nothing to name: no default has been chosen at all.
@@ -173,7 +173,7 @@ struct CheckNetworkIntent: AppIntent {
     /// same fact and a second copy would let the two drift apart in translation.
     private static var noDefaultDialog: String {
         // xcstrings
-        String(localized: "Conduck doesn't know which AI to use for new chats. Open Conduck to pick one?")
+        String(localized: "Conduck doesn't know which AI to use for new chats. Open Conduck to pick one?", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Ask — at most once per process — to continue in the foreground so the

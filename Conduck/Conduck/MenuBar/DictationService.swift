@@ -225,7 +225,7 @@ final class DictationService: RecordingExclusivityAuthority {
                 guard let self, self.state == .recording else { return }
                 self.stopDisplayTimer()
                 self.state = .error(
-                    message: String(localized: "Recording stopped unexpectedly. Try again."), // xcstrings: chat-ui-mac-freeze
+                    message: String(localized: "Recording stopped unexpectedly. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings: chat-ui-mac-freeze
                     isRetryable: false
                 )
             }
@@ -376,7 +376,7 @@ final class DictationService: RecordingExclusivityAuthority {
                 state = .error(
                     message: waiting
                         ? pendingRetryBusyMessage
-                        : String(localized: "No saved recording to retry."), // xcstrings
+                        : String(localized: "No saved recording to retry.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                     // A capture somebody else is holding IS retryable — the
                     // reservation lapses. Only an empty queue retires the
                     // affordance.
@@ -502,7 +502,7 @@ final class DictationService: RecordingExclusivityAuthority {
             try pending.audioData.write(to: tempURL, options: [.atomic])
         } catch {
             state = .error(
-                message: String(localized: "Couldn't stage the retry audio."), // xcstrings
+                message: String(localized: "Couldn't stage the retry audio.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                 isRetryable: false
             )
             return false
@@ -534,7 +534,7 @@ final class DictationService: RecordingExclusivityAuthority {
             let trimmed = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 state = .error(
-                    message: String(localized: "Transcription returned empty text. Please try again."), // xcstrings
+                    message: String(localized: "Transcription returned empty text. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                     isRetryable: true
                 )
                 return false
@@ -623,7 +623,7 @@ final class DictationService: RecordingExclusivityAuthority {
                     message: String(
                         localized: "workboard.capture.retry.voice.message",
                         defaultValue: "Couldn't add this recording to Work. Try again."
-                    ),
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     isRetryable: true
                 )
             } else {
@@ -771,7 +771,7 @@ final class DictationService: RecordingExclusivityAuthority {
         String(
             localized: "workboard.capture.retry.voice.message",
             defaultValue: "Couldn't add this recording to Work. Try again."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Draw a Retry's own outcome — but only while it is still the outcome the
@@ -860,7 +860,7 @@ final class DictationService: RecordingExclusivityAuthority {
             message: String(
                 localized: "pendingRetry.card.count",
                 defaultValue: "\(pendingRetryCount) recordings waiting"
-            ),
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             isRetryable: true
         )
         return retired
@@ -879,7 +879,7 @@ final class DictationService: RecordingExclusivityAuthority {
         String(
             localized: "pendingRetry.card.busy",
             defaultValue: "This recording is already being finished. Try again in a moment."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     // MARK: - Recording
@@ -927,7 +927,7 @@ final class DictationService: RecordingExclusivityAuthority {
         // live capture is sacred, so the SECOND start is refused, never the first.
         guard SpeechExclusivity.shared.acquireMicLease(excluding: self) else {
             state = .error(
-                message: String(localized: "Microphone is in use by another recording."), // xcstrings: chat-ui-mac-freeze
+                message: String(localized: "Microphone is in use by another recording.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings: chat-ui-mac-freeze
                 isRetryable: false
             )
             return
@@ -970,7 +970,7 @@ final class DictationService: RecordingExclusivityAuthority {
                 guard started else {
                     stopDisplayTimer()
                     state = .error(
-                        message: String(localized: "Failed to start recording."), // xcstrings
+                        message: String(localized: "Failed to start recording.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                         isRetryable: false
                     )
                     return
@@ -982,7 +982,7 @@ final class DictationService: RecordingExclusivityAuthority {
                 guard startToken == recordingStartToken else { return }
                 stopDisplayTimer()
                 state = .error(
-                    message: String(localized: "Microphone access denied. Open System Settings → Privacy & Security → Microphone to enable."), // xcstrings
+                    message: String(localized: "Microphone access denied. Open System Settings → Privacy & Security → Microphone to enable.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                     isRetryable: false
                 )
             } catch {
@@ -1011,7 +1011,7 @@ final class DictationService: RecordingExclusivityAuthority {
 
         guard let audioData = recorder.stopRecording() else {
             state = .error(
-                message: String(localized: "No audio data recorded."), // xcstrings
+                message: String(localized: "No audio data recorded.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                 isRetryable: false
             )
             return
@@ -1125,7 +1125,7 @@ final class DictationService: RecordingExclusivityAuthority {
             try audioData.write(to: tempURL, options: [.atomic])
         } catch {
             state = .error(
-                message: String(localized: "Couldn't stage audio for upload."), // xcstrings
+                message: String(localized: "Couldn't stage audio for upload.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                 isRetryable: false
             )
             return
@@ -1179,7 +1179,7 @@ final class DictationService: RecordingExclusivityAuthority {
             let trimmed = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 state = .error(
-                    message: String(localized: "Transcription returned empty text. Please try again."), // xcstrings
+                    message: String(localized: "Transcription returned empty text. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                     isRetryable: true
                 )
                 return

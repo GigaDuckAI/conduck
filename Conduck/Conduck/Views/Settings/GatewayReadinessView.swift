@@ -199,7 +199,7 @@ struct GatewayReadinessView: View {
         let template = String(localized: LocalizedStringResource(
             "gatewaySetup.readiness.getServer",
             defaultValue: "Don't have one yet? Get [OpenClaw](%1$@) or [Hermes](%2$@)."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         let markdown = String(format: template, openclaw, hermes)
         return (try? AttributedString(
             markdown: markdown,

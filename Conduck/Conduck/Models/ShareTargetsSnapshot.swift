@@ -54,6 +54,8 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
     /// open — a highlight, not a decision, so nothing is sent until the person
     /// presses the button naming it.
     let defaultGatewayRef: String?
+    /// Device-local app language; absent in snapshots from older app versions.
+    let appLanguage: String?
 
     /// One gateway the picker offers for a NEW conversation. Every render value is
     /// pre-resolved main-app-side (the appex can't reach the palette enum).
@@ -180,7 +182,7 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, generatedAt, gateways, recentConversations, recentWorkItems
-        case defaultGatewayRef
+        case defaultGatewayRef, appLanguage
     }
 
     nonisolated init(
@@ -189,7 +191,8 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
         gateways: [Gateway],
         recentConversations: [RecentConversation],
         recentWorkItems: [RecentWorkItem] = [],
-        defaultGatewayRef: String? = nil
+        defaultGatewayRef: String? = nil,
+        appLanguage: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.generatedAt = generatedAt
@@ -197,6 +200,7 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
         self.recentConversations = recentConversations
         self.recentWorkItems = recentWorkItems
         self.defaultGatewayRef = defaultGatewayRef
+        self.appLanguage = appLanguage
     }
 
     /// Nothing is hard-required at the top level — a snapshot with no targets is a
@@ -215,6 +219,7 @@ nonisolated struct ShareTargetsSnapshot: Codable, Sendable {
         self.recentConversations = try c.decodeIfPresent([RecentConversation].self, forKey: .recentConversations) ?? []
         self.recentWorkItems = try c.decodeIfPresent([RecentWorkItem].self, forKey: .recentWorkItems) ?? []
         self.defaultGatewayRef = try c.decodeIfPresent(String.self, forKey: .defaultGatewayRef)
+        self.appLanguage = try c.decodeIfPresent(String.self, forKey: .appLanguage)
     }
 }
 

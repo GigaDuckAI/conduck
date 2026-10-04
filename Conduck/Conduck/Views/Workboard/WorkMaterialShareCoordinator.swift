@@ -335,15 +335,15 @@ final class WorkMaterialShareCoordinator {
 
     // MARK: - Copy
 
-    static let preparingCopy = LocalizedStringResource(
+    static var preparingCopy: LocalizedStringResource { LocalizedStringResource(
         "workboard.material.share.preparing",
         defaultValue: "Preparing…"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
-    static let failedTitle = LocalizedStringResource(
+    static var failedTitle: LocalizedStringResource { LocalizedStringResource(
         "workboard.material.share.failed.title",
         defaultValue: "Couldn’t share this material"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// The two unreadable states, each named for the verb the person asked for.
     /// `WorkMaterialExportError` carries no copy precisely so this sentence can
@@ -358,7 +358,7 @@ final class WorkMaterialShareCoordinator {
             : LocalizedStringResource(
                 "workboard.material.share.unavailable",
                 defaultValue: "This material is not available on this device. Reattach it here to share it."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         return WorkShareFailure(title: failedTitle, message: String(localized: message))
     }
 
@@ -368,7 +368,7 @@ final class WorkMaterialShareCoordinator {
             message: String(localized: LocalizedStringResource(
                 "workboard.material.share.stale",
                 defaultValue: "This card changed while it was being prepared, so nothing was shared."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         )
     }
 
@@ -378,7 +378,7 @@ final class WorkMaterialShareCoordinator {
             message: String(localized: LocalizedStringResource(
                 "workboard.material.share.noAnchor",
                 defaultValue: "The share options couldn’t be opened from this window."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         )
     }
 

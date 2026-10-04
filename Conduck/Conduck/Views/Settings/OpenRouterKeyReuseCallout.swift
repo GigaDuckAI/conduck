@@ -56,7 +56,7 @@ struct OpenRouterKeyReuseCallout: View {
             Text(LocalizedStringResource(
                 "settings.openRouter.reuse.caveat",
                 defaultValue: "Copies the key once — later changes won't sync, and both use the same OpenRouter credits."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

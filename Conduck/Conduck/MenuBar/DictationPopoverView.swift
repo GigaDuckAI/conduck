@@ -310,7 +310,7 @@ struct DictationPopoverView: View {
                 .help(String(localized: LocalizedStringResource(
                     "popover.header.newChat",
                     defaultValue: "New chat"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
 
             Spacer()
@@ -326,7 +326,7 @@ struct DictationPopoverView: View {
             .help(String(localized: LocalizedStringResource(
                 "conversations.openInWindow",
                 defaultValue: "Open in Window"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
@@ -528,7 +528,7 @@ struct DictationPopoverView: View {
                 .accessibilityLabel(Text(String(localized: LocalizedStringResource(
                     "popover.capture.thumbnailLabel",
                     defaultValue: "Captured screen region"
-                ))))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))))
         }
     }
 
@@ -598,7 +598,7 @@ struct DictationPopoverView: View {
                     String(localized: LocalizedStringResource(
                         "workboard.menuBar.compose.work.title",
                         defaultValue: "Add to Work"
-                    )),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     systemImage: "tray.and.arrow.down"
                 )
                 .font(.callout.weight(.semibold))
@@ -614,11 +614,11 @@ struct DictationPopoverView: View {
                     ? LocalizedStringResource(
                         "workboard.menuBar.compose.work.placeholder",
                         defaultValue: "Write a note for your desk"
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     : LocalizedStringResource(
                         "workboard.menuBar.compose.placeholder",
                         defaultValue: "Write a note or message"
-                    )),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 text: isWorkOnly ? $coordinator.quickWorkDraft : $coordinator.quickDraft,
                 axis: .vertical
             )
@@ -676,7 +676,7 @@ struct DictationPopoverView: View {
                     Button(String(localized: LocalizedStringResource(
                         "common.cancel",
                         defaultValue: "Cancel"
-                    ))) {
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))) {
                         coordinator.discardWorkOnlyCompose()
                     }
                     .buttonStyle(.plain)
@@ -700,7 +700,7 @@ struct DictationPopoverView: View {
                         Text(String(localized: LocalizedStringResource(
                             "workboard.menuBar.addToWork",
                             defaultValue: "Add to Work"
-                        )))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     }
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(AppColors.textPrimary)
@@ -728,7 +728,7 @@ struct DictationPopoverView: View {
                 .help(String(localized: LocalizedStringResource(
                     "workboard.menuBar.addToWork.help",
                     defaultValue: "Save this as private work without contacting your AI"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
 
                 if !isWorkOnly {
                     Spacer(minLength: 0)
@@ -740,7 +740,7 @@ struct DictationPopoverView: View {
                             String(localized: LocalizedStringResource(
                                 "workboard.menuBar.ask",
                                 defaultValue: "Ask"
-                            )),
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                             systemImage: "arrow.up"
                         )
                         .font(.callout.weight(.semibold))
@@ -762,7 +762,7 @@ struct DictationPopoverView: View {
                     .help(String(localized: LocalizedStringResource(
                         "workboard.menuBar.ask.help",
                         defaultValue: "Send this to your default AI gateway"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 }
             }
         }
@@ -836,7 +836,7 @@ struct DictationPopoverView: View {
                 .accessibilityLabel(Text(String(localized: LocalizedStringResource(
                     "popover.compose.removeImage",
                     defaultValue: "Remove screenshot"
-                ))))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))))
             }
             .onHover { thumbnailHovering = $0 }
         }
@@ -878,27 +878,27 @@ struct DictationPopoverView: View {
             return String(localized: LocalizedStringResource(
                 "workboard.voice.starting",
                 defaultValue: "Starting the microphone…"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .listening:
             return String(localized: LocalizedStringResource(
                 "workboard.voice.listening",
                 defaultValue: "Listening"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .transcribing:
             return String(localized: LocalizedStringResource(
                 "workboard.voice.transcribing",
                 defaultValue: "Turning speech into text…"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .preparing:
             return String(localized: LocalizedStringResource(
                 "workboard.voice.preparing",
                 defaultValue: "Preparing on-device voice…"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .stopped:
             return String(localized: LocalizedStringResource(
                 "workboard.voice.error.title",
                 defaultValue: "Voice capture stopped"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -943,7 +943,7 @@ struct DictationPopoverView: View {
                 cancelLabel: LocalizedStringResource(
                     "popover.cancelTranscription",
                     defaultValue: "Cancel transcription"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 cancel: cancelWorkCapture
             ) {
                 workTranscriptionIndicator
@@ -1022,7 +1022,7 @@ struct DictationPopoverView: View {
                             String(localized: LocalizedStringResource(
                                 "workboard.voice.tryAgain",
                                 defaultValue: "Try Again"
-                            )),
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                             systemImage: "arrow.counterclockwise"
                         )
                         .font(.callout.weight(.semibold))
@@ -1095,7 +1095,7 @@ struct DictationPopoverView: View {
                 return String(localized: LocalizedStringResource(
                     "workboard.voice.error.wordsMissing",
                     defaultValue: "Your screenshot is on your desk. The words are not yet."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             // Accepted, not arrived. Publication hands back an id before the
             // desk has imported the envelope, so the two states are one
@@ -1106,7 +1106,7 @@ struct DictationPopoverView: View {
                 return String(localized: LocalizedStringResource(
                     "workboard.voice.error.wordsMissingScreenshotQueued",
                     defaultValue: "Your screenshot is on its way to your desk. The words are not yet."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             // Present tense, and scoped to THIS CAPTURE. "Nothing reached your
             // desk" is a claim about history, and it is false for a capture
@@ -1128,7 +1128,7 @@ struct DictationPopoverView: View {
                     Nothing from this capture is on your desk yet. The recording \
                     is kept on this Mac for Try Again.
                     """
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
 
         // The words landed, so the only thing that can have put this arm on
@@ -1138,7 +1138,7 @@ struct DictationPopoverView: View {
         return String(localized: LocalizedStringResource(
             "workboard.voice.error.screenshotMissing",
             defaultValue: "Your words are on your desk. The screenshot is not."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The reason, in the recorder's own words — except while a Try Again was
@@ -1151,7 +1151,7 @@ struct DictationPopoverView: View {
             return String(localized: LocalizedStringResource(
                 "pendingRetry.card.busy",
                 defaultValue: "This recording is already being finished. Try again in a moment."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         return error.descriptionWithRecovery()
     }
@@ -1226,7 +1226,7 @@ struct DictationPopoverView: View {
             .help(String(localized: LocalizedStringResource(
                 "workboard.menuBar.saved.open.help",
                 defaultValue: "Open Work and see the new card"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .queued:
             Label(feedback.message, systemImage: "clock")
                 .font(.caption)
@@ -1499,7 +1499,7 @@ struct DictationPopoverView: View {
                 Text(String(localized: LocalizedStringResource(
                     "popover.start.withShortcut",
                     defaultValue: "Press \(shortcut.description) to talk"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .font(.callout)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -1507,7 +1507,7 @@ struct DictationPopoverView: View {
                 Text(String(localized: LocalizedStringResource(
                     "popover.start.noShortcut",
                     defaultValue: "Set a shortcut in Settings to start talking"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .font(.callout)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -1525,7 +1525,7 @@ struct DictationPopoverView: View {
                 Text(String(localized: LocalizedStringResource(
                     "popover.start.captureToWork",
                     defaultValue: "Press \(workShortcut.description) to capture to Work"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
                 .multilineTextAlignment(.center)
@@ -1551,7 +1551,7 @@ struct DictationPopoverView: View {
             Text(String(localized: LocalizedStringResource(
                 "popover.tip.screenshotAsk",
                 defaultValue: "New: press ⌘⇧2 to grab a screen region, then talk — the screenshot and your words are sent together."
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .font(.caption)
             .foregroundStyle(AppColors.textTertiary)
             .multilineTextAlignment(.leading)
@@ -1570,7 +1570,7 @@ struct DictationPopoverView: View {
             .accessibilityLabel(Text(String(localized: LocalizedStringResource(
                 "popover.tip.dismiss",
                 defaultValue: "Dismiss tip"
-            ))))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -1680,7 +1680,7 @@ struct DictationPopoverView: View {
                     Text(LocalizedStringResource(
                         "popover.retry.savedRecording.action",
                         defaultValue: "Retry saved recording"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.system(size: 12, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)
@@ -1767,7 +1767,7 @@ struct DictationPopoverView: View {
 
     /// The ✕'s default reading. Declared once so the four surfaces that draw a
     /// plain cancel cannot pick up four wordings of it.
-    private static let cancelLabel = LocalizedStringResource("popover.cancel", defaultValue: "Cancel")
+    private static var cancelLabel: LocalizedStringResource { LocalizedStringResource("popover.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// Compact cancel control, shared by every capture HUD and the in-flight
     /// wait. `xmark.circle.fill` at 24pt — a lot lighter than a 40pt footer
@@ -1874,7 +1874,7 @@ struct DictationPopoverView: View {
                     systemImage: "xmark",
                     size: 12,
                     tint: AppColors.textTertiary,
-                    accessibilityLabel: Text(LocalizedStringResource("common.dismiss", defaultValue: "Dismiss"))
+                    accessibilityLabel: Text(LocalizedStringResource("common.dismiss", defaultValue: "Dismiss", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 ) {
                     replyWorkCaptureNotice = nil
                 }
@@ -1889,7 +1889,7 @@ struct DictationPopoverView: View {
                     )
                     dismiss()
                 } label: {
-                    Text(LocalizedStringResource("workboard.chatCapture.open", defaultValue: "Open Work"))
+                    Text(LocalizedStringResource("workboard.chatCapture.open", defaultValue: "Open Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
                 }
@@ -1967,13 +1967,13 @@ struct DictationPopoverView: View {
     private func speakAccessibilityLabel(for id: UUID) -> LocalizedStringResource {
         switch speaker.speakState(for: id) {
         case .idle:
-            return LocalizedStringResource("bubble.speak.aloud", defaultValue: "Speak aloud")
+            return LocalizedStringResource("bubble.speak.aloud", defaultValue: "Speak aloud", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .loading:
-            return LocalizedStringResource("bubble.speak.loading", defaultValue: "Loading")
+            return LocalizedStringResource("bubble.speak.loading", defaultValue: "Loading", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .playing:
-            return LocalizedStringResource("bubble.speak.pause", defaultValue: "Pause")
+            return LocalizedStringResource("bubble.speak.pause", defaultValue: "Pause", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .paused:
-            return LocalizedStringResource("bubble.speak.resume", defaultValue: "Resume")
+            return LocalizedStringResource("bubble.speak.resume", defaultValue: "Resume", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -1983,7 +1983,7 @@ struct DictationPopoverView: View {
         vm.copy(reply)
         AccessibilityAnnouncer.announce(String(localized: LocalizedStringResource(
             "bubble.copy.copied", defaultValue: "Copied"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         let feedbackID = UUID()
         copyFeedbackID = feedbackID
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { didCopy = true }
@@ -2033,7 +2033,7 @@ struct DictationPopoverView: View {
                     Text(String(localized: LocalizedStringResource(
                         "popover.capture.retryVoice",
                         defaultValue: "Retry Voice"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .font(.system(size: 12, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)
@@ -2049,7 +2049,7 @@ struct DictationPopoverView: View {
                     Text(String(localized: LocalizedStringResource(
                         "popover.capture.typeInstead",
                         defaultValue: "Type Instead"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .font(.system(size: 12))
                 }
                 .buttonStyle(.bordered)
@@ -2064,7 +2064,7 @@ struct DictationPopoverView: View {
                     Text(String(localized: LocalizedStringResource(
                         "popover.capture.discard",
                         defaultValue: "Discard"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .font(.system(size: 12))
                 }
                 .buttonStyle(.bordered)
@@ -2110,7 +2110,7 @@ struct DictationPopoverView: View {
                         Text(String(localized: LocalizedStringResource(
                             "popover.retry",
                             defaultValue: "Retry"
-                        )))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                         .font(.system(size: 12, weight: .medium))
                     }
                     .buttonStyle(.borderedProminent)
@@ -2123,7 +2123,7 @@ struct DictationPopoverView: View {
                         Text(String(localized: LocalizedStringResource(
                             "popover.retry",
                             defaultValue: "Retry"
-                        )))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                         .font(.system(size: 12, weight: .medium))
                     }
                     .buttonStyle(.borderedProminent)
@@ -2141,7 +2141,7 @@ struct DictationPopoverView: View {
                     Text(String(localized: LocalizedStringResource(
                         "popover.dismiss",
                         defaultValue: "Dismiss"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .font(.system(size: 12))
                 }
                 .buttonStyle(.bordered)
@@ -2175,7 +2175,7 @@ struct DictationPopoverView: View {
                     Text(String(localized: LocalizedStringResource(
                         "popover.retry",
                         defaultValue: "Retry"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .font(.system(size: 12, weight: .medium))
                 }
                 .buttonStyle(.borderedProminent)
@@ -2197,7 +2197,7 @@ struct DictationPopoverView: View {
                     NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
                 } label: {
                     Label(
-                        LocalizedStringResource("thread.troubleshoot", defaultValue: "Troubleshoot"),
+                        LocalizedStringResource("thread.troubleshoot", defaultValue: "Troubleshoot", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "stethoscope"
                     )
                     .font(.system(size: 12, weight: .medium))
@@ -2210,7 +2210,7 @@ struct DictationPopoverView: View {
                 Text(String(localized: LocalizedStringResource(
                     "popover.dismiss",
                     defaultValue: "Dismiss"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .font(.system(size: 12))
             }
             .buttonStyle(.bordered)

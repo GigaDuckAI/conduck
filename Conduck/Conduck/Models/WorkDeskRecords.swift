@@ -324,29 +324,29 @@ nonisolated enum WorkDeskStoreError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .projectNotFound:
-            String(localized: "workdesk.error.projectMissing", defaultValue: "That project is no longer available.")
+            String(localized: "workdesk.error.projectMissing", defaultValue: "That project is no longer available.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .projectArchived:
-            String(localized: "workdesk.error.projectArchived", defaultValue: "Restore this project before continuing its conversations or adding materials.")
+            String(localized: "workdesk.error.projectArchived", defaultValue: "Restore this project before continuing its conversations or adding materials.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .activeProjectLimitReached:
-            String(localized: "workdesk.error.projectLimit", defaultValue: "The free plan includes \(Constants.maxActiveWorkProjects) active projects. Archive a project to make room. Its materials and conversations stay available.")
+            String(localized: "workdesk.error.projectLimit", defaultValue: "The free plan includes \(Constants.maxActiveWorkProjects) active projects. Archive a project to make room. Its materials and conversations stay available.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .projectSelectionRequired:
-            String(localized: "workdesk.error.projectSelectionRequired", defaultValue: "Choose up to \(Constants.maxActiveWorkProjects) active projects to continue on the free plan. Your materials and conversations stay available.")
+            String(localized: "workdesk.error.projectSelectionRequired", defaultValue: "Choose up to \(Constants.maxActiveWorkProjects) active projects to continue on the free plan. Your materials and conversations stay available.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .projectSelectionChanged:
-            String(localized: "workdesk.error.projectSelectionChanged", defaultValue: "Your projects or plan changed. Review the active projects again before confirming.")
+            String(localized: "workdesk.error.projectSelectionChanged", defaultValue: "Your projects or plan changed. Review the active projects again before confirming.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .materialNotFound:
-            String(localized: "workdesk.error.materialMissing", defaultValue: "An item has changed or been removed. Refresh the desk and try again.")
+            String(localized: "workdesk.error.materialMissing", defaultValue: "An item has changed or been removed. Refresh the desk and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .materialMoved:
-            String(localized: "workdesk.error.materialMoved", defaultValue: "An item moved to another project. Refresh the desk and try again.")
+            String(localized: "workdesk.error.materialMoved", defaultValue: "An item moved to another project. Refresh the desk and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .invalidTitle:
-            String(localized: "workdesk.error.title", defaultValue: "Give the project a name.")
+            String(localized: "workdesk.error.title", defaultValue: "Give the project a name.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .contentTooLong:
-            String(localized: "workdesk.error.textLength", defaultValue: "Shorten the project name or brief, then try again.")
+            String(localized: "workdesk.error.textLength", defaultValue: "Shorten the project name or brief, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .identifierCollision:
-            String(localized: "workdesk.error.conflict", defaultValue: "The desk changed. Try that action again.")
+            String(localized: "workdesk.error.conflict", defaultValue: "The desk changed. Try that action again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .staleProject:
-            String(localized: "workdesk.error.projectChanged", defaultValue: "This project changed while you were editing. Reopen it to use the latest version.")
+            String(localized: "workdesk.error.projectChanged", defaultValue: "This project changed while you were editing. Reopen it to use the latest version.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .staleProjectDeletion:
-            String(localized: "workdesk.error.deletionChanged", defaultValue: "This project or its materials changed. Review the deletion again.")
+            String(localized: "workdesk.error.deletionChanged", defaultValue: "This project or its materials changed. Review the deletion again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }

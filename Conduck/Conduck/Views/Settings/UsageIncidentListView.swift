@@ -242,7 +242,7 @@ nonisolated enum UsageIncidentList {
         guard group.attemptCount > 1 else { return nil }
         if group.recovered {
             return String(localized: "settings.usage.incidents.recovered",
-                          defaultValue: "Failed, then recovered")
+                          defaultValue: "Failed, then recovered", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         // Two keys rather than one plural rule, for the reason the rest of the
         // usage screens use two: the headless build path that synthesizes the
@@ -250,9 +250,9 @@ nonisolated enum UsageIncidentList {
         // count-driven variation would have to be hand-written into it.
         return group.failureCount == 1
             ? String(localized: "settings.usage.incidents.failed.one",
-                     defaultValue: "Failed once")
+                     defaultValue: "Failed once", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : String(localized: "settings.usage.incidents.failed.other",
-                     defaultValue: "Failed \(group.failureCount) times")
+                     defaultValue: "Failed \(group.failureCount) times", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The paging line. ALWAYS rendered, including when the whole list fits:
@@ -260,7 +260,7 @@ nonisolated enum UsageIncidentList {
     /// rather than as a total.
     static func showingText(shown: Int, total: Int) -> String {
         String(localized: "settings.usage.incidents.showing",
-               defaultValue: "Showing \(shown) of \(total)")
+               defaultValue: "Showing \(shown) of \(total)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 }
 
@@ -284,7 +284,7 @@ struct UsageIncidentListView: View {
     }
 
     private var title: String {
-        String(localized: "settings.usage.incidents.title", defaultValue: "Failed turns")
+        String(localized: "settings.usage.incidents.title", defaultValue: "Failed turns", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     var body: some View {
@@ -319,7 +319,7 @@ struct UsageIncidentListView: View {
         Section {
             Text(LocalizedStringResource(
                 "settings.usage.incidents.none",
-                defaultValue: "No failed turns in this range."))
+                defaultValue: "No failed turns in this range.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
@@ -361,7 +361,7 @@ struct UsageIncidentListView: View {
             Text(verbatim: UsageFailureReasonCopy.label(forAppErrorCode: code))
         } else {
             Text(LocalizedStringResource(
-                "settings.usage.incidents.header", defaultValue: "Failures"))
+                "settings.usage.incidents.header", defaultValue: "Failures", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -373,7 +373,7 @@ struct UsageIncidentListView: View {
                     defaultValue: """
                         Only turns sent through \
                         \(UsageGatewayLabel.name(for: ref, roster: gatewayRoster)).
-                        """))
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             Text(UsageDetailFormat.rangeCaption(for: model.displayedRange))
         }
@@ -384,7 +384,7 @@ struct UsageIncidentListView: View {
             visibleCount += UsageIncidentList.pageSize
         } label: {
             Text(LocalizedStringResource(
-                "settings.usage.incidents.showMore", defaultValue: "Show more"))
+                "settings.usage.incidents.showMore", defaultValue: "Show more", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -456,7 +456,7 @@ struct UsageIncidentListView: View {
             if !isOpenable {
                 Text(LocalizedStringResource(
                     "settings.usage.detail.threads.unavailable",
-                    defaultValue: "Conversation unavailable"))
+                    defaultValue: "Conversation unavailable", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
             }
@@ -471,15 +471,15 @@ struct UsageIncidentListView: View {
     private func timestampText(_ group: UsageIncidentGroup) -> String {
         guard let startedAt = group.startedAt else {
             return String(localized: "settings.usage.incidents.undated",
-                          defaultValue: "Time not recorded")
+                          defaultValue: "Time not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
-        return startedAt.formatted(date: .abbreviated, time: .shortened)
+        return startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened, locale: AppLocalization.locale))
     }
 
     private func reasonText(_ group: UsageIncidentGroup) -> String {
         guard let code = group.appErrorCode else {
             return String(localized: "settings.usage.incidents.reason.unrecorded",
-                          defaultValue: "Reason not recorded")
+                          defaultValue: "Reason not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return UsageFailureReasonCopy.label(forAppErrorCode: code)
     }

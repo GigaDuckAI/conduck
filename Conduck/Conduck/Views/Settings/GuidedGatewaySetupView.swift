@@ -330,7 +330,7 @@ struct GuidedGatewaySetupView: View {
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "settings.guidedSetup.back",
                         defaultValue: "Go Back"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     #if os(macOS)
                     .padding(.top, 16)
                     .padding(.leading, 24)
@@ -354,7 +354,7 @@ struct GuidedGatewaySetupView: View {
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "settings.guidedSetup.close",
                     defaultValue: "Close"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 #if os(macOS)
                 .padding(.top, 16)
                 .padding(.trailing, 24)

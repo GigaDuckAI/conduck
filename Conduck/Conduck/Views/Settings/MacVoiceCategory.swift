@@ -63,7 +63,7 @@ struct MacVoiceCategory: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice"))
+                    Text(LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.title2.weight(.semibold))
                         .foregroundStyle(AppColors.textEmphasis)
                         .padding(.horizontal, 28)
@@ -169,7 +169,7 @@ struct MacVoiceCategory: View {
             } label: {
                 HStack(spacing: 12) {
                     Label(
-                        LocalizedStringResource("settings.voice.providersKeys.label", defaultValue: "Providers & Keys"),
+                        LocalizedStringResource("settings.voice.providersKeys.label", defaultValue: "Providers & Keys", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "key.horizontal"
                     )
                     .foregroundStyle(AppColors.textPrimary)
@@ -183,16 +183,16 @@ struct MacVoiceCategory: View {
             }
             .settingsCardRowButton()
         } header: {
-            Text(LocalizedStringResource("settings.voice.setup.header", defaultValue: "Voice Setup"))
+            Text(LocalizedStringResource("settings.voice.setup.header", defaultValue: "Voice Setup", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
     private var providersKeysSummary: Text {
         let count = viewModel.configuredVoiceVendorCount
         if count == 0 {
-            return Text(LocalizedStringResource("settings.voice.providersKeys.summary.none", defaultValue: "None configured"))
+            return Text(LocalizedStringResource("settings.voice.providersKeys.summary.none", defaultValue: "None configured", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
-        return Text(LocalizedStringResource("settings.voice.providersKeys.summary.count", defaultValue: "\(count) configured"))
+        return Text(LocalizedStringResource("settings.voice.providersKeys.summary.count", defaultValue: "\(count) configured", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The native display name for the active language hint — `LanguageList`'s
@@ -200,7 +200,7 @@ struct MacVoiceCategory: View {
     /// STT chooser's `VoiceLanguageHint`.
     private var languageDisplayName: String {
         guard let code = viewModel.preferredLanguage, !code.isEmpty else {
-            return String(localized: "Auto-detect") // xcstrings
+            return String(localized: "Auto-detect", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings
         }
         return LanguageList.nativeName(for: code)
     }
@@ -282,7 +282,7 @@ private struct MacVoiceProvidersList: View {
             // under the pointer doesn't change across the push.
             .macSettingsRail()
         }
-        .macSettingsSubScreenChrome(title: String(localized: LocalizedStringResource("settings.voice.providersKeys.label", defaultValue: "Providers & Keys")))
+        .macSettingsSubScreenChrome(title: String(localized: LocalizedStringResource("settings.voice.providersKeys.label", defaultValue: "Providers & Keys", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .navigationDestination(item: $vendorRoute) { id in
             if let vendor = VoiceVendorRegistry.lookup(id: id, customEndpoints: viewModel.customVoiceEndpoints) {
                 MacVoiceVendorDetail(viewModel: viewModel, vendor: vendor)
@@ -301,12 +301,12 @@ private struct MacVoiceProvidersList: View {
                 vendorRow(row)
             }
         } header: {
-            Text(LocalizedStringResource("settings.voice.section.header", defaultValue: "Providers"))
+            Text(LocalizedStringResource("settings.voice.section.header", defaultValue: "Providers", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.voice.list.footer",
                 defaultValue: "One key per provider unlocks both speech-to-text and text-to-speech. Tap a provider to add a key or manage it."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -325,7 +325,7 @@ private struct MacVoiceProvidersList: View {
             addCustomEndpointRow
             capHintRow
         } header: {
-            Text(LocalizedStringResource("settings.voice.section.customHeader", defaultValue: "Custom endpoints"))
+            Text(LocalizedStringResource("settings.voice.section.customHeader", defaultValue: "Custom endpoints", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -358,8 +358,8 @@ private struct MacVoiceProvidersList: View {
         } label: {
             Label {
                 Text(canAdd
-                    ? LocalizedStringResource("settings.voice.custom.add", defaultValue: "Add custom endpoint")
-                    : LocalizedStringResource("settings.voice.custom.addAtCap", defaultValue: "Add custom endpoint (limit reached)"))
+                    ? LocalizedStringResource("settings.voice.custom.add", defaultValue: "Add custom endpoint", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("settings.voice.custom.addAtCap", defaultValue: "Add custom endpoint (limit reached)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } icon: {
                 Image(systemName: "plus.circle.fill")
                     .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)
@@ -381,7 +381,7 @@ private struct MacVoiceProvidersList: View {
             Text(LocalizedStringResource(
                 "settings.voice.custom.capHint",
                 defaultValue: "Delete an endpoint above to add another."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption2)
             .foregroundStyle(AppColors.textTertiary)
             // Passive prose: the row primitive supplies the inset the card
@@ -506,11 +506,11 @@ private struct MacVoiceVendorDetail: View {
                     title: LocalizedStringResource(
                         "settings.voice.openRouter.reuse.title.v2",
                         defaultValue: "You've already set up OpenRouter for chat. Reuse that API key for voice?"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     buttonTitle: LocalizedStringResource(
                         "settings.voice.openRouter.reuse.button.v2",
                         defaultValue: "Use my OpenRouter key"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     action: { await viewModel.reuseGatewayKeyForOpenRouterVoice() }
                 )
                 // A passive block — prose, one offer button and a caveat — so it
@@ -560,11 +560,11 @@ private struct MacVoiceVendorDetail: View {
                     defaultModelPlaceholder: STTProvider.lookup(id: metadata.id).model
                 )
             } header: {
-                Text(LocalizedStringResource("settings.voice.section.providerAccess", defaultValue: "Provider Access"))
+                Text(LocalizedStringResource("settings.voice.section.providerAccess", defaultValue: "Provider Access", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } footer: {
                 Text(metadata.isOnDevice
-                     ? LocalizedStringResource("settings.voice.access.footer.apple.v3", defaultValue: "Runs on your device. Your voice stays on your device.")
-                     : LocalizedStringResource("settings.voice.access.footer", defaultValue: "One key for both Speech-to-Text and Text-to-Speech, stored in your Apple Keychain."))
+                     ? LocalizedStringResource("settings.voice.access.footer.apple.v3", defaultValue: "Runs on your device. Your voice stays on your device.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                     : LocalizedStringResource("settings.voice.access.footer", defaultValue: "One key for both Speech-to-Text and Text-to-Speech, stored in your Apple Keychain.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -600,14 +600,14 @@ private struct MacVoiceVendorDetail: View {
                 ))
             )
         } header: {
-            Text(LocalizedStringResource("settings.voice.section.speechToText", defaultValue: "Speech-to-Text"))
+            Text(LocalizedStringResource("settings.voice.section.speechToText", defaultValue: "Speech-to-Text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             // Short privacy hint right under the record test; the per-test credit
             // cost is covered once in the trailing `detailFootnotes`.
             Text(LocalizedStringResource(
                 "settings.voice.cloudTest.footer",
                 defaultValue: "Your clip is sent to \(metadata.displayName) to transcribe, and isn't kept by Conduck."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
             .foregroundStyle(AppColors.textSecondary)
         }
@@ -630,14 +630,14 @@ private struct MacVoiceVendorDetail: View {
                     Text(LocalizedStringResource(
                         "settings.voice.tts.coming",
                         defaultValue: "Text-to-speech coming soon"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textTertiary)
                 }
                 // A status line, not a control: inset, no wash.
                 .settingsCardPassiveRow()
             } header: {
-                Text(LocalizedStringResource("settings.voice.section.textToSpeech", defaultValue: "Text-to-Speech"))
+                Text(LocalizedStringResource("settings.voice.section.textToSpeech", defaultValue: "Text-to-Speech", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         case .none:
             EmptyView()
@@ -680,7 +680,7 @@ private struct MacVoiceVendorDetail: View {
             // bleed. An inset applied out here would wrap that row too, and no
             // modifier reaches back out of it.
         } header: {
-            Text(LocalizedStringResource("settings.voice.section.textToSpeech", defaultValue: "Text-to-Speech"))
+            Text(LocalizedStringResource("settings.voice.section.textToSpeech", defaultValue: "Text-to-Speech", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             ttsPreviewStatusFooter(ttsID: ttsID)
         }
@@ -700,7 +700,7 @@ private struct MacVoiceVendorDetail: View {
             Text(LocalizedStringResource(
                 "settings.voice.tts.footer",
                 defaultValue: "If a reply can't reach this provider, it's spoken with Apple's on-device voice."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -721,12 +721,12 @@ private struct MacVoiceVendorDetail: View {
                 Text(LocalizedStringResource(
                     "settings.voice.detail.activationHint",
                     defaultValue: "Choose your active providers on the Voice screen."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 if !vendor.isOnDevice {
                     Text(LocalizedStringResource(
                         "settings.voice.detail.creditHint",
                         defaultValue: "Tests and previews use a small amount of your provider's credits."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
             .font(.caption)
@@ -746,7 +746,7 @@ private struct MacVoiceVendorDetail: View {
             Text(LocalizedStringResource(
                 "settings.voice.detail.activationHint.apple",
                 defaultValue: "Apple is configured here only. Choose your active speech-to-text and text-to-speech providers on the Voice screen."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
         }
     }

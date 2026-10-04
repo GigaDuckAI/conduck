@@ -271,14 +271,14 @@ struct RemoteAgentConfigBody: View {
             return RemoteAgentBackendRegistry.lookup(id: backend).urlPlaceholder
         }
         return String(localized: "remoteAgent.custom.url.placeholder",
-                      defaultValue: "https://your-gateway.example:port")
+                      defaultValue: "https://your-gateway.example:port", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     private var tokenPlaceholder: String {
         if case .builtin(let backend) = ref {
             return RemoteAgentBackendRegistry.lookup(id: backend).tokenPlaceholder
         }
-        return String(localized: "Bearer token")
+        return String(localized: "Bearer token", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     private var rowState: KeyValidationState {
@@ -294,8 +294,8 @@ struct RemoteAgentConfigBody: View {
     /// wording has to arrive on a key the catalog has never seen.
     private var secretSheetTitle: LocalizedStringResource {
         builtinDescriptor?.category == .hostedModel
-            ? LocalizedStringResource("settings.remoteAgent.apiKey.sheet.title", defaultValue: "Enter API key")
-            : LocalizedStringResource("settings.remoteAgent.bearerToken.sheet.title", defaultValue: "Enter bearer token")
+            ? LocalizedStringResource("settings.remoteAgent.apiKey.sheet.title", defaultValue: "Enter API key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("settings.remoteAgent.bearerToken.sheet.title", defaultValue: "Enter bearer token", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// The secret row's tip — a vendor-issued, billed API key and a password you
@@ -410,11 +410,11 @@ struct RemoteAgentConfigBody: View {
             LocalizedStringResource(
                 "settings.remoteAgent.forgetAlert.title.v2",
                 defaultValue: "Forget \(viewModel.displayName(for: ref))?"
-            ),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: $showingForgetConfirm
         ) {
             Button(
-                LocalizedStringResource("settings.remoteAgent.forgetAlert.confirm", defaultValue: "Forget"),
+                LocalizedStringResource("settings.remoteAgent.forgetAlert.confirm", defaultValue: "Forget", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .destructive
             ) {
                 Task {
@@ -441,7 +441,7 @@ struct RemoteAgentConfigBody: View {
                 }
             }
             Button(
-                LocalizedStringResource("settings.remoteAgent.forgetAlert.cancel", defaultValue: "Cancel"),
+                LocalizedStringResource("settings.remoteAgent.forgetAlert.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) { }
         } message: {
@@ -451,11 +451,11 @@ struct RemoteAgentConfigBody: View {
             LocalizedStringResource(
                 "settings.remoteAgent.makeDefault.title",
                 defaultValue: "Make \(viewModel.displayName(for: ref)) your default gateway?"
-            ),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: $showingMakeDefaultPrompt
         ) {
             Button(
-                LocalizedStringResource("settings.remoteAgent.makeDefault.confirm", defaultValue: "Make Default")
+                LocalizedStringResource("settings.remoteAgent.makeDefault.confirm", defaultValue: "Make Default", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             ) {
                 Task {
                     await viewModel.setDefaultRemoteAgentRef(ref)
@@ -463,7 +463,7 @@ struct RemoteAgentConfigBody: View {
                 }
             }
             Button(
-                LocalizedStringResource("settings.remoteAgent.makeDefault.notNow", defaultValue: "Not Now"),
+                LocalizedStringResource("settings.remoteAgent.makeDefault.notNow", defaultValue: "Not Now", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) {
                 dismiss()
@@ -472,7 +472,7 @@ struct RemoteAgentConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.remoteAgent.makeDefault.message",
                 defaultValue: "New chats start here. Existing chats keep their gateway."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         .bufferedEditorChrome(
             isDirty: isDirty,
@@ -489,7 +489,7 @@ struct RemoteAgentConfigBody: View {
             },
             suppressCancelOnExit: $suppressCancelOnExit,
             title: viewModel.displayName(for: ref),
-            saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save"),
+            saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             // Always a PUSH — from the Personal AI list, the Watch companion
             // settings, or the iPad detail pane. Never its own modal root.
             exit: .back,
@@ -532,18 +532,18 @@ struct RemoteAgentConfigBody: View {
             return Text(LocalizedStringResource(
                 "settings.remoteAgent.forgetAlert.message.custom.retained.v2",
                 defaultValue: "Conduck will delete this gateway and its saved URL, key, and pin, plus any file-transfer setup for it (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. Conversations bound to it stay readable but can't send new turns. They keep this gateway's colour tag so you can still tell them apart; its name is not kept."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         if capability.hidesURLField {
             return Text(LocalizedStringResource(
                 "settings.remoteAgent.forgetAlert.message.hosted",
                 defaultValue: "Conduck will erase the saved API key. It's removed from all your devices signed in to iCloud, not just this one. You'll re-enter it next time."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         return Text(LocalizedStringResource(
             "settings.remoteAgent.forgetAlert.message.v2",
             defaultValue: "Conduck will erase the saved URL, key, and pin, plus any file-transfer setup for this gateway (server address and generated password). The URL and key are removed from all your devices signed in to iCloud; the pin is only on this one. You'll re-enter them next time."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     // MARK: - Editor sections (fixed zone order; descriptor-driven omission)
@@ -626,7 +626,7 @@ struct RemoteAgentConfigBody: View {
             return LocalizedStringResource(
                 "settings.remoteAgent.unavailableHere.body",
                 defaultValue: "Some saved details for this gateway aren't available on this device. If you set it up on another device, iCloud may still be syncing them."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         // Nothing stored, yet this device points new chats at it — so the user was
         // told elsewhere that it "isn't available here" and has arrived to find out
@@ -636,7 +636,7 @@ struct RemoteAgentConfigBody: View {
             return LocalizedStringResource(
                 "settings.remoteAgent.unavailableHere.defaultOnly.body",
                 defaultValue: "New chats on this device start here, but nothing for this gateway is stored on it. If you set it up on another device, iCloud may still be syncing — otherwise, fill it in below."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return nil
     }
@@ -656,7 +656,7 @@ struct RemoteAgentConfigBody: View {
                         Text(LocalizedStringResource(
                             "settings.remoteAgent.unavailableHere.checkAgain",
                             defaultValue: "Check again"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                     }
                     .buttonStyle(.bordered)
@@ -721,15 +721,15 @@ struct RemoteAgentConfigBody: View {
                     } label: {
                         HStack(spacing: 8) {
                             Label(
-                                LocalizedStringResource("settings.remoteAgent.quickConnect.label", defaultValue: "Quick connect"),
+                                LocalizedStringResource("settings.remoteAgent.quickConnect.label", defaultValue: "Quick connect", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                                 systemImage: "bolt"
                             )
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(AppColors.textPrimary)
                             Spacer(minLength: 8)
                             Text(isConfigured
-                                ? LocalizedStringResource("settings.remoteAgent.quickConnect.setUpAgain", defaultValue: "Set up again")
-                                : LocalizedStringResource("settings.remoteAgent.quickConnect.setUp", defaultValue: "Set up"))
+                                ? LocalizedStringResource("settings.remoteAgent.quickConnect.setUpAgain", defaultValue: "Set up again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                                : LocalizedStringResource("settings.remoteAgent.quickConnect.setUp", defaultValue: "Set up", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                 .font(.subheadline)
                                 // Amber only where the user owes an action: an
                                 // UNCONFIGURED gateway. A configured one owes
@@ -775,7 +775,7 @@ struct RemoteAgentConfigBody: View {
         LocalizedStringResource(
             "settings.remoteAgent.quickConnect.dirtyGate",
             defaultValue: "Save or discard your changes before reconnecting."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     // MARK: - Zone 2: Connection (fields guarded off the descriptor)
@@ -800,7 +800,7 @@ struct RemoteAgentConfigBody: View {
             endpointRemedyCallout
             serverCertificateRow
         } header: {
-            Text(LocalizedStringResource("settings.remoteAgent.connection.header", defaultValue: "Connection"))
+            Text(LocalizedStringResource("settings.remoteAgent.connection.header", defaultValue: "Connection", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             connectionFooterView
         }
@@ -831,7 +831,7 @@ struct RemoteAgentConfigBody: View {
                 // deliberately label-less (the header already names it) — there is
                 // no in-row label to sit beside.
                 HStack(spacing: 0) {
-                    Text(LocalizedStringResource("settings.remoteAgent.model.header", defaultValue: "Model"))
+                    Text(LocalizedStringResource("settings.remoteAgent.model.header", defaultValue: "Model", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     InfoTipButton(tip: GatewayFieldTips.model)
                     Spacer(minLength: 0)
                 }
@@ -879,7 +879,7 @@ struct RemoteAgentConfigBody: View {
                 LocalizedStringResource(
                     "settings.remoteAgent.credentialHelp.button",
                     defaultValue: "Where do I find Gateway URL and Bearer token?"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "questionmark.circle"
             )
             .font(.footnote.weight(.semibold))
@@ -904,7 +904,7 @@ struct RemoteAgentConfigBody: View {
                 LocalizedStringResource(
                     "settings.remoteAgent.customHelp.button",
                     defaultValue: "What do I enter for Gateway URL and Bearer token?"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "questionmark.circle"
             )
             .font(.footnote.weight(.semibold))
@@ -947,7 +947,7 @@ struct RemoteAgentConfigBody: View {
                     title: LocalizedStringResource(
                         "settings.remoteAgent.endpointDisabled.title",
                         defaultValue: "Most likely: the AI endpoint is switched off"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     body: remedy
                 )
             } else if isCustom {
@@ -956,11 +956,11 @@ struct RemoteAgentConfigBody: View {
                     title: LocalizedStringResource(
                         "settings.remoteAgent.customCheck.title.v2",
                         defaultValue: "Run a server check"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     body: LocalizedStringResource(
                         "settings.remoteAgent.customCheck.body.v2",
                         defaultValue: "On the server, download the script: \(Constants.conduckConnectDownloadCommand). Then run bash conduck-connect.sh --check-server — or --check-adapter if this is an adapter built for Conduck. It only sends test requests; nothing on the server changes."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
             }
         }
@@ -985,11 +985,11 @@ struct RemoteAgentConfigBody: View {
                 title: LocalizedStringResource(
                     "settings.remoteAgent.keylessPublic.title",
                     defaultValue: "This address appears public"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 body: LocalizedStringResource(
                     "settings.remoteAgent.keylessPublic.body",
                     defaultValue: "Without a token, anyone who can reach this address can use your AI and its tools. Turn the token back on, or move the gateway onto a private network like Tailscale. If this address is already private (a Tailscale or internal name), you can ignore this."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
         }
     }
@@ -1027,12 +1027,12 @@ struct RemoteAgentConfigBody: View {
         var text = AttributedString(String(localized: LocalizedStringResource(
             "settings.remoteAgent.section.footer.hosted",
             defaultValue: "Hosted by OpenRouter, not your own server."
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         text += AttributedString(" ")
         var link = AttributedString(String(localized: LocalizedStringResource(
             "settings.remoteAgent.guided.hosted.link",
             defaultValue: "Get an API key"
-        )) + " ↗")
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) + " ↗")
         link.link = URL(string: "https://openrouter.ai")
         text += link
         return text
@@ -1060,7 +1060,7 @@ struct RemoteAgentConfigBody: View {
            (viewModel.remoteAgentModelStrings[ref] ?? "")
                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Label(
-                LocalizedStringResource("settings.remoteAgent.save.needsModel", defaultValue: "Pick a model to save."),
+                LocalizedStringResource("settings.remoteAgent.save.needsModel", defaultValue: "Pick a model to save.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "info.circle"
             )
                 .font(.caption)
@@ -1075,7 +1075,7 @@ struct RemoteAgentConfigBody: View {
     private var nameField: some View {
         if case .custom(let id) = ref {
             VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringResource("settings.remoteAgent.custom.name.label", defaultValue: "Name"))
+                Text(LocalizedStringResource("settings.remoteAgent.custom.name.label", defaultValue: "Name", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
                 TextField(
@@ -1084,7 +1084,7 @@ struct RemoteAgentConfigBody: View {
                     prompt: Text(LocalizedStringResource(
                         "settings.remoteAgent.custom.name.placeholder",
                         defaultValue: "My gateway"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 )
                     .labelsHidden()
                     #if os(iOS)
@@ -1097,7 +1097,7 @@ struct RemoteAgentConfigBody: View {
                         LocalizedStringResource(
                             "settings.remoteAgent.custom.name.duplicate",
                             defaultValue: "Another gateway already uses this name."
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.caption2)
@@ -1119,7 +1119,7 @@ struct RemoteAgentConfigBody: View {
                         LocalizedStringResource(
                             "remoteAgent.custom.name.required",
                             defaultValue: "Give this gateway a name."
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "info.circle"
                     )
                     .font(.caption2)
@@ -1151,7 +1151,7 @@ struct RemoteAgentConfigBody: View {
             )
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 0) {
-                    Text(LocalizedStringResource("settings.remoteAgent.url.label", defaultValue: "Gateway URL"))
+                    Text(LocalizedStringResource("settings.remoteAgent.url.label", defaultValue: "Gateway URL", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
                     InfoTipButton(tip: GatewayFieldTips.url)
@@ -1210,11 +1210,11 @@ struct RemoteAgentConfigBody: View {
                         ? LocalizedStringResource(
                             "settings.remoteAgent.url.footer.custom",
                             defaultValue: "Paste the https:// address your server is reachable at — just the base address, Conduck adds /v1/… itself."
-                        )
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                         : LocalizedStringResource(
                             "settings.remoteAgent.url.footer",
                             defaultValue: "Paste the https:// address your gateway is reachable at."
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1249,7 +1249,7 @@ struct RemoteAgentConfigBody: View {
         return String(
             localized: "settings.remoteAgent.url.baseHint",
             defaultValue: "Conduck adds /v1/… itself — it will use \(normalized.absoluteString)"
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     // MARK: - Model field
@@ -1278,11 +1278,11 @@ struct RemoteAgentConfigBody: View {
                         ? LocalizedStringResource(
                             "settings.remoteAgent.model.placeholder.hosted",
                             defaultValue: "e.g. anthropic/claude-opus-4"
-                        )
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                         : LocalizedStringResource(
                             "settings.remoteAgent.model.placeholder",
                             defaultValue: "e.g. llama3"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 )
                     .labelsHidden()
                     #if os(iOS)
@@ -1300,11 +1300,11 @@ struct RemoteAgentConfigBody: View {
                     ? LocalizedStringResource(
                         "settings.remoteAgent.model.helper.hosted.v2",
                         defaultValue: "Add :floor to a model ID for the cheapest provider, or :nitro for the fastest."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     : LocalizedStringResource(
                         "settings.remoteAgent.model.helper",
                         defaultValue: "Leave blank to let your gateway choose. Ollama and vLLM usually need a model ID running on your server, e.g. 'llama3'."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
 
@@ -1336,7 +1336,7 @@ struct RemoteAgentConfigBody: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.model.suggestions.loading",
                         defaultValue: "Loading models…"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                 }
@@ -1345,7 +1345,7 @@ struct RemoteAgentConfigBody: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.model.suggestions.empty.v2",
                     defaultValue: "Model suggestions haven’t been loaded. Test the connection to load them."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
                     .padding(.top, 2)
@@ -1360,7 +1360,7 @@ struct RemoteAgentConfigBody: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.model.suggestions.header",
                     defaultValue: "Available models"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(AppColors.textSecondary)
                 if showFilter {
@@ -1370,7 +1370,7 @@ struct RemoteAgentConfigBody: View {
                         prompt: Text(LocalizedStringResource(
                             "settings.remoteAgent.model.suggestions.filter.placeholder",
                             defaultValue: "Filter models"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     )
                         .labelsHidden()
                         #if os(iOS)
@@ -1384,7 +1384,7 @@ struct RemoteAgentConfigBody: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.model.suggestions.noMatch",
                         defaultValue: "No models match your filter."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                 } else {
@@ -1459,7 +1459,7 @@ struct RemoteAgentConfigBody: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.auth.requiresToken.label",
                         defaultValue: "Requires a bearer token"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
                     InfoTipButton(tip: GatewayFieldTips.requiresToken)
@@ -1471,11 +1471,11 @@ struct RemoteAgentConfigBody: View {
                     ? LocalizedStringResource(
                         "settings.remoteAgent.auth.keyless.helper",
                         defaultValue: "Keyless — no token sent. Use only on a private network (Tailscale/LAN); HTTPS encrypts traffic but doesn't limit who can reach your gateway."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     : LocalizedStringResource(
                         "settings.remoteAgent.auth.requiresToken.helper",
                         defaultValue: "Turn off only for a keyless gateway on a private network (Tailscale/LAN)."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1503,7 +1503,7 @@ struct RemoteAgentConfigBody: View {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "settings.remoteAgent.auth.requiresToken.label",
                 defaultValue: "Requires a bearer token"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .tint(AppColors.brandAmber)
         }
         // Passive: the ⓘ and the switch are two INDEPENDENT actions sharing one
@@ -1532,11 +1532,11 @@ struct RemoteAgentConfigBody: View {
                 title: LocalizedStringResource(
                     "settings.remoteAgent.openRouter.reuse.title",
                     defaultValue: "You've already set up OpenRouter for voice. Reuse that API key here?"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 buttonTitle: LocalizedStringResource(
                     "settings.remoteAgent.openRouter.reuse.button",
                     defaultValue: "Use my voice key"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: {
                     stagedVoiceKeyReuse = true
                     // A different credential is now in play — retract any live
@@ -1645,7 +1645,7 @@ struct RemoteAgentConfigBody: View {
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "settings.remoteAgent.token.stagedVoiceKey.change",
                         defaultValue: "Change"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 }
             }
             // The row's own action, so the inset band the sub-`Button`s can't
@@ -1656,7 +1656,7 @@ struct RemoteAgentConfigBody: View {
 
     private var secretRowLabel: String {
         builtinDescriptor?.tokenLabel
-            ?? String(localized: LocalizedStringResource("settings.remoteAgent.token.label", defaultValue: "Bearer token"))
+            ?? String(localized: LocalizedStringResource("settings.remoteAgent.token.label", defaultValue: "Bearer token", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The secret's state, shared by the visible trailing label and the row's
@@ -1688,11 +1688,11 @@ struct RemoteAgentConfigBody: View {
     private var secretStatusLabel: some View {
         switch secretRowStatus {
         case .stagedVoiceKey:
-            Text(LocalizedStringResource("settings.remoteAgent.token.stagedVoiceKey", defaultValue: "OpenRouter voice key selected"))
+            Text(LocalizedStringResource("settings.remoteAgent.token.stagedVoiceKey", defaultValue: "OpenRouter voice key selected", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.success)
         case .entered:
-            Text(LocalizedStringResource("settings.secret.entered", defaultValue: "Entered"))
+            Text(LocalizedStringResource("settings.secret.entered", defaultValue: "Entered", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.success)
         case .stored(let masked):
@@ -1700,7 +1700,7 @@ struct RemoteAgentConfigBody: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(AppColors.textTertiary)
         case .notSet:
-            Text(LocalizedStringResource("settings.secret.notSet", defaultValue: "Set"))
+            Text(LocalizedStringResource("settings.secret.notSet", defaultValue: "Set", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -1711,13 +1711,13 @@ struct RemoteAgentConfigBody: View {
     private var secretStatusAccessibilityValue: Text {
         switch secretRowStatus {
         case .stagedVoiceKey:
-            return Text(LocalizedStringResource("settings.remoteAgent.token.stagedVoiceKey", defaultValue: "OpenRouter voice key selected"))
+            return Text(LocalizedStringResource("settings.remoteAgent.token.stagedVoiceKey", defaultValue: "OpenRouter voice key selected", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .entered:
-            return Text(LocalizedStringResource("settings.secret.entered", defaultValue: "Entered"))
+            return Text(LocalizedStringResource("settings.secret.entered", defaultValue: "Entered", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .stored(let masked):
             return Text(masked)
         case .notSet:
-            return Text(LocalizedStringResource("settings.secret.notSet", defaultValue: "Set"))
+            return Text(LocalizedStringResource("settings.secret.notSet", defaultValue: "Set", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -1768,7 +1768,7 @@ struct RemoteAgentConfigBody: View {
                 LocalizedStringResource(
                     "settings.remoteAgent.testConnection.button.instance",
                     defaultValue: "Test \(viewModel.displayName(for: ref))"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "checkmark.shield"
             )
             .font(.subheadline.weight(.semibold))
@@ -1816,8 +1816,8 @@ struct RemoteAgentConfigBody: View {
         // the catalog so code + runtime agree (a reworded default would be ignored
         // for an existing key). The confirmation dialog explains the distinction.
         isCustom
-            ? LocalizedStringResource("settings.remoteAgent.delete.button", defaultValue: "Delete")
-            : LocalizedStringResource("settings.remoteAgent.clear.button", defaultValue: "Forget")
+            ? LocalizedStringResource("settings.remoteAgent.delete.button", defaultValue: "Delete", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("settings.remoteAgent.clear.button", defaultValue: "Forget", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     // MARK: - Zone 6: Destructive (Forget / Delete — plain red, isolated last)
@@ -2075,7 +2075,7 @@ struct RemoteAgentConfigBody: View {
         case .checking:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(LocalizedStringResource("settings.remoteAgent.testConnection.checking", defaultValue: "Checking…"))
+                Text(LocalizedStringResource("settings.remoteAgent.testConnection.checking", defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -2124,15 +2124,15 @@ struct RemoteAgentConfigBody: View {
     /// row — this file's SwiftUI expressions are already near the type-check budget.
     private var successLabel: LocalizedStringResource {
         if builtinDescriptor?.probesAuthDirectly == true {
-            return LocalizedStringResource("settings.remoteAgent.testConnection.keyValid", defaultValue: "API key valid")
+            return LocalizedStringResource("settings.remoteAgent.testConnection.keyValid", defaultValue: "API key valid", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         if viewModel.remoteAgentProbeReportedNoModels.contains(ref) {
             return LocalizedStringResource(
                 "settings.remoteAgent.testConnection.successNoModels",
                 defaultValue: "Connected — no models yet"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
-        return LocalizedStringResource("settings.remoteAgent.testConnection.success", defaultValue: "Connected")
+        return LocalizedStringResource("settings.remoteAgent.testConnection.success", defaultValue: "Connected", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// Deep-link into Diagnostics, focused on the code the last probe failed with.
@@ -2184,7 +2184,7 @@ struct RemoteAgentConfigBody: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.certRow.label",
                         defaultValue: "Server certificate"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
                         #if os(macOS)
@@ -2245,22 +2245,22 @@ struct RemoteAgentConfigBody: View {
                 ? LocalizedStringResource(
                     "settings.remoteAgent.certRow.value.automaticSaveRequired",
                     defaultValue: "Automatic · Save required"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 : LocalizedStringResource(
                     "settings.remoteAgent.certRow.value.pinnedSaveRequired",
                     defaultValue: "Pinned · Save required"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         if bufferEmpty {
             return LocalizedStringResource(
                 "settings.remoteAgent.certRow.value.automatic",
                 defaultValue: "Automatic"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return LocalizedStringResource(
             "settings.remoteAgent.certRow.value.pinned",
             defaultValue: "Pinned on this device"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// Amber only where the user owes an action (an unsaved pin change, in
@@ -2280,7 +2280,7 @@ struct RemoteAgentConfigBody: View {
             fileTransferRow
             imageHistoryPicker
         } header: {
-            Text(LocalizedStringResource("settings.remoteAgent.inChats.header", defaultValue: "In chats"))
+            Text(LocalizedStringResource("settings.remoteAgent.inChats.header", defaultValue: "In chats", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -2302,7 +2302,7 @@ struct RemoteAgentConfigBody: View {
                         Text(LocalizedStringResource(
                             "settings.remoteAgent.fileTransfer.row.label",
                             defaultValue: "File transfer"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline)
                             .foregroundStyle(AppColors.textPrimary)
                         Spacer(minLength: 8)
@@ -2356,13 +2356,13 @@ struct RemoteAgentConfigBody: View {
             return LocalizedStringResource(
                 "settings.remoteAgent.fileTransfer.gate.unsaved",
                 defaultValue: "Save this gateway before setting up file transfer."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         if isDirty {
             return LocalizedStringResource(
                 "settings.remoteAgent.fileTransfer.gate.dirty",
                 defaultValue: "Save or discard your changes first."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return nil
     }
@@ -2421,7 +2421,7 @@ struct RemoteAgentConfigBody: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.imageHistory.label",
                         defaultValue: "Image history"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
                     Spacer()
@@ -2449,7 +2449,7 @@ struct RemoteAgentConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.remoteAgent.imageHistory.label",
                 defaultValue: "Image history"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             InfoTipButton(tip: GatewayFieldTips.imageHistory)
@@ -2469,7 +2469,7 @@ struct RemoteAgentConfigBody: View {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "settings.remoteAgent.imageHistory.label",
                 defaultValue: "Image history"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .tint(AppColors.brandAmber)
             #endif
             }
@@ -2495,11 +2495,11 @@ struct RemoteAgentConfigBody: View {
     private func optionLabel(for policy: ImageHistoryPolicy) -> LocalizedStringResource {
         switch policy {
         case .recent:
-            return LocalizedStringResource("settings.remoteAgent.imageHistory.option.recent", defaultValue: "Recent")
+            return LocalizedStringResource("settings.remoteAgent.imageHistory.option.recent", defaultValue: "Recent", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .extended:
-            return LocalizedStringResource("settings.remoteAgent.imageHistory.option.extended", defaultValue: "Extended")
+            return LocalizedStringResource("settings.remoteAgent.imageHistory.option.extended", defaultValue: "Extended", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .all:
-            return LocalizedStringResource("settings.remoteAgent.imageHistory.option.all", defaultValue: "All")
+            return LocalizedStringResource("settings.remoteAgent.imageHistory.option.all", defaultValue: "All", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -2511,17 +2511,17 @@ struct RemoteAgentConfigBody: View {
             return LocalizedStringResource(
                 "settings.remoteAgent.imageHistory.caption.recent",
                 defaultValue: "Fastest and cheapest. The agent sees your last 3 image messages in full; older uploaded images become file references."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .extended:
             return LocalizedStringResource(
                 "settings.remoteAgent.imageHistory.caption.extended",
                 defaultValue: "Sees your last 10 image messages in full. Slower and pricier on image-heavy chats."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .all:
             return LocalizedStringResource(
                 "settings.remoteAgent.imageHistory.caption.all",
                 defaultValue: "Re-sends every recent image message in full each turn. Most expensive; long image chats may hit size limits."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -2553,13 +2553,13 @@ struct RemoteAgentConfigBody: View {
                 }
                 badgeFields
             } header: {
-                Text(LocalizedStringResource("settings.remoteAgent.devices.header", defaultValue: "Devices"))
+                Text(LocalizedStringResource("settings.remoteAgent.devices.header", defaultValue: "Devices", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } footer: {
                 if showsExportCode {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.showSetupCode.footer",
                         defaultValue: "Set up another device by scanning or pasting a code. The code holds this gateway's sensitive information, so treat it like a password."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
         }
@@ -2575,7 +2575,7 @@ struct RemoteAgentConfigBody: View {
                 LocalizedStringResource(
                     "settings.remoteAgent.setupOtherDevice.button",
                     defaultValue: "Set up on another device"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "qrcode"
             )
             .font(.subheadline.weight(.semibold))
@@ -2594,13 +2594,13 @@ struct RemoteAgentConfigBody: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.badge.header",
                     defaultValue: "Badge"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.badge.helper",
                     defaultValue: "Shown on Apple Watch and CarPlay so you can tell gateways apart."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
                 colorSwatchRow(id: id)
@@ -2658,7 +2658,7 @@ struct RemoteAgentConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.remoteAgent.badge.monogram.label",
                 defaultValue: "Monogram"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption.weight(.medium))
                 .foregroundStyle(AppColors.textSecondary)
             TextField(
@@ -2667,7 +2667,7 @@ struct RemoteAgentConfigBody: View {
                 prompt: Text(LocalizedStringResource(
                     "settings.remoteAgent.badge.monogram.placeholder",
                     defaultValue: "1–2 letters"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             )
                 .labelsHidden()
                 #if os(iOS)
@@ -2716,7 +2716,7 @@ struct RemoteAgentConfigBody: View {
         return String(localized: LocalizedStringResource(
             "settings.remoteAgent.url.temporaryTunnelHint",
             defaultValue: "This is a temporary tunnel address. It normally changes when the tunnel restarts, and this gateway then stops working until you set it up again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     // MARK: - Plain-http hints
@@ -2743,7 +2743,7 @@ struct RemoteAgentConfigBody: View {
         return String(localized: LocalizedStringResource(
             "settings.endpoint.plainHTTP.warning.v2",
             defaultValue: "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The always-visible refusal for a saved fingerprint paired with a
@@ -2781,7 +2781,7 @@ struct RemoteAgentConfigBody: View {
             format: String(localized: LocalizedStringResource(
                 "settings.remoteAgent.url.portHint",
                 defaultValue: "Using port %lld"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             port
         )
     }

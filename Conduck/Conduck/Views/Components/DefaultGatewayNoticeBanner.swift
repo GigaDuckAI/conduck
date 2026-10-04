@@ -146,25 +146,25 @@ struct DefaultGatewayNoticeBanner: View {
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.noDefault.title.mac",
                 defaultValue: "This Mac doesn't have a default gateway."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             #else
             if DeviceCapabilities.isiPad {
                 return String(localized: LocalizedStringResource(
                     "chat.defaultGateway.noDefault.title.ipad",
                     defaultValue: "This iPad doesn't have a default gateway."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.noDefault.title.iphone",
                 defaultValue: "This iPhone doesn't have a default gateway."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             #endif
 
         case .adopted(let adoptedName, _):
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.adopted.title",
                 defaultValue: "New chats now use \(adoptedName)"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -180,25 +180,25 @@ struct DefaultGatewayNoticeBanner: View {
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.noDefault.body",
                 defaultValue: "Anything that starts a chat from outside the app doesn't know which one to use. Pick one and new chats will start on it. New chats you start here are fine."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
 
         case .adopted(_, let previousName):
             #if os(macOS)
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.adopted.body.mac",
                 defaultValue: "\(previousName) isn't available on this Mac. Chats you've already started keep the gateway they started on."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             #else
             if DeviceCapabilities.isiPad {
                 return String(localized: LocalizedStringResource(
                     "chat.defaultGateway.adopted.body.ipad",
                     defaultValue: "\(previousName) isn't available on this iPad. Chats you've already started keep the gateway they started on."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.adopted.body.iphone",
                 defaultValue: "\(previousName) isn't available on this iPhone. Chats you've already started keep the gateway they started on."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             #endif
         }
     }
@@ -209,12 +209,12 @@ struct DefaultGatewayNoticeBanner: View {
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.noDefault.action",
                 defaultValue: "Pick a gateway"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .adopted:
             return String(localized: LocalizedStringResource(
                 "chat.defaultGateway.adopted.action",
                 defaultValue: "Change"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -222,6 +222,6 @@ struct DefaultGatewayNoticeBanner: View {
         String(localized: LocalizedStringResource(
             "chat.defaultGateway.dismiss.a11y",
             defaultValue: "Dismiss"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 }

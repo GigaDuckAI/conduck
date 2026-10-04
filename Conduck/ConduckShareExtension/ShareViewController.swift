@@ -150,10 +150,12 @@ final class ShareViewController: UIViewController {
         // Send, `onAddToWorkboard` only by Add to Work, and neither fires without
         // a tap. The manifest's `shouldAutosend` is stamped `true` at commit
         // time, so a Send still sends (share-and-go).
+        let snapshot = loadShareTargetsSnapshot()
+        AppLocalization.configure(language: snapshot?.appLanguage)
         let rootView = ShareView(
             attachmentCount: extractedAttachmentCount(),
             previewItems: buildPreviewItems(),
-            snapshot: loadShareTargetsSnapshot(),
+            snapshot: snapshot,
             resolveLeadHeader: { [weak self] in await self?.resolveLeadHeader() },
             resolveCapture: { [weak self] in await self?.capturePayloadTask?.value?.payload },
             onSend: { [weak self] caption, target, includePageText in
@@ -166,7 +168,7 @@ final class ShareViewController: UIViewController {
             submissionState: submissionState
         )
 
-        let host = UIHostingController(rootView: rootView)
+        let host = UIHostingController(rootView: rootView.environment(\.locale, AppLocalization.locale))
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(host.view)
@@ -318,7 +320,7 @@ final class ShareViewController: UIViewController {
                 return ResolvedHeader(
                     filename: primary,
                     typeDescription: String(localized: "share.capture.webpage",
-                                            defaultValue: "Web page",
+                                            defaultValue: "Web page", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
                                             comment: "Type description shown in the Share Extension header for a captured Safari web page"),
                     icon: nil
                 )
@@ -343,7 +345,7 @@ final class ShareViewController: UIViewController {
                 return ResolvedHeader(
                     filename: host,
                     typeDescription: String(localized: "share.item.link",
-                                            defaultValue: "Link",
+                                            defaultValue: "Link", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
                                             comment: "Subtitle shown for a shared web link"),
                     icon: nil
                 )
@@ -370,7 +372,9 @@ final class ShareViewController: UIViewController {
         let concreteType = provider.registeredTypeIdentifiers.first(where: { id in
             id != UTType.item.identifier && id != UTType.data.identifier
         })
-        let typeDesc = concreteType.flatMap { UTType($0)?.localizedDescription }
+        let typeLabel = String(localized: "share.item.file", defaultValue: "File", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        let typeExtension = concreteType.flatMap { UTType($0)?.preferredFilenameExtension }
+        let typeDesc = typeExtension.map { $0.uppercased() + " · " + typeLabel } ?? typeLabel
         return ResolvedHeader(
             filename: provider.suggestedName ?? "",
             typeDescription: typeDesc,
@@ -389,7 +393,7 @@ final class ShareViewController: UIViewController {
     private func resolveImageHeader(_ provider: NSItemProvider) async -> ResolvedHeader {
         let suggested = provider.suggestedName
         let typeDesc = String(localized: "share.type.image",
-                              defaultValue: "Image",
+                              defaultValue: "Image", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
                               comment: "Type description for a shared image in the Share Extension header")
         return await withCheckedContinuation { continuation in
             provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, _ in
@@ -998,10 +1002,10 @@ final class ShareViewController: UIViewController {
         let center = UNUserNotificationCenter.current()
         let content = UNMutableNotificationContent()
         content.title = String(localized: "share.notification.title",
-                               defaultValue: "Shared to Conduck",
+                               defaultValue: "Shared to Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
                                comment: "Title of the local notification posted after a share is queued")
         content.body = String(localized: "share.notification.body",
-                              defaultValue: "Tap to open in Conduck.",
+                              defaultValue: "Tap to open in Conduck.", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
                               comment: "Body of the local notification posted after a share is queued")
         content.userInfo = ["shareEnvelopeID": uuid.uuidString]
         content.sound = nil

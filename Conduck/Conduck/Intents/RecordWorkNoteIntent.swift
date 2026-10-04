@@ -39,17 +39,17 @@ import AppIntents
 import Foundation
 
 struct RecordWorkNoteIntent: AppIntent {
-    static var title: LocalizedStringResource = LocalizedStringResource(
+    static var title: LocalizedStringResource { LocalizedStringResource(
         "intent.workVoiceNote.title",
         defaultValue: "Record a Note to Work"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
-    static var description = IntentDescription(
+    static var description: IntentDescription { IntentDescription(
         LocalizedStringResource(
             "intent.workVoiceNote.description",
             defaultValue: "Open Work and start recording a voice note. The audio goes only to the speech provider you chose, and only to be turned into words — never into a conversation."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Foreground only — there is no headless half of this intent to fall back
     /// to, so declaring `.background` would only promise a mode that cannot do

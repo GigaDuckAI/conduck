@@ -66,7 +66,7 @@ struct DiagnosticsView: View {
     var body: some View {
         // Nav chrome only — `DiagnosticsContent` brings its own container.
         DiagnosticsContent(runner: runner, focusedRef: focusedRef, focusedErrorCode: focusedErrorCode)
-            .navigationTitle(Text(LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics")))
+            .navigationTitle(Text(LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #else
@@ -241,7 +241,7 @@ struct DiagnosticsContent: View {
                 Text(LocalizedStringResource(
                     "error.recipeLink.howToFix",
                     defaultValue: "How to fix this"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 Image(systemName: "arrow.up.right")
                     .font(.caption)
             }
@@ -266,12 +266,12 @@ struct DiagnosticsContent: View {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel(Text(LocalizedStringResource(
-                        "diagnostics.action.checking", defaultValue: "Checking…")))
+                        "diagnostics.action.checking", defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             } else {
                 Label(
                     gatewayHasNotBeenTested(ref)
-                        ? LocalizedStringResource("diagnostics.action.checkGateway", defaultValue: "Check connection")
-                        : LocalizedStringResource("diagnostics.action.recheckGateway", defaultValue: "Check again"),
+                        ? LocalizedStringResource("diagnostics.action.checkGateway", defaultValue: "Check connection", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("diagnostics.action.recheckGateway", defaultValue: "Check again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "arrow.clockwise"
                 )
                 .font(.subheadline.weight(.semibold))
@@ -318,7 +318,7 @@ struct DiagnosticsContent: View {
             Text(LocalizedStringResource(
                 "diagnostics.footer.testEverything",
                 defaultValue: "Checks saved connections and file servers, plus transcription when set up. File tests upload and remove a small sample. Cloud tests may incur charges. Voice playback is tested separately."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -336,12 +336,12 @@ struct DiagnosticsContent: View {
                     Text(LocalizedStringResource(
                         "diagnostics.action.testingEverything",
                         defaultValue: "Testing…"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textPrimary)
                 }
             } else {
                 Label(
-                    LocalizedStringResource("diagnostics.action.testEverything", defaultValue: "Run diagnostic checks"),
+                    LocalizedStringResource("diagnostics.action.testEverything", defaultValue: "Run diagnostic checks", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "stethoscope"
                 )
                 .labelStyle(AccentGlyphActionLabelStyle())
@@ -364,8 +364,8 @@ struct DiagnosticsContent: View {
                 // red they are looking at is a second ago, not ten minutes ago.
                 VStack(alignment: .leading, spacing: 2) {
                     Text(runner.attentionCount == 1
-                        ? LocalizedStringResource("diagnostics.summary.attention.one", defaultValue: "1 issue needs attention")
-                        : LocalizedStringResource("diagnostics.summary.attention.many", defaultValue: "\(runner.attentionCount) issues need attention"))
+                        ? LocalizedStringResource("diagnostics.summary.attention.one", defaultValue: "1 issue needs attention", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("diagnostics.summary.attention.many", defaultValue: "\(runner.attentionCount) issues need attention", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
                     scopedCheckLine
@@ -382,7 +382,7 @@ struct DiagnosticsContent: View {
         } else if runner.checksSettledGreen {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(LocalizedStringResource("diagnostics.summary.passed", defaultValue: "Diagnostic checks passed"))
+                    Text(LocalizedStringResource("diagnostics.summary.passed", defaultValue: "Diagnostic checks passed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
                     lastCheckedLine
@@ -395,7 +395,7 @@ struct DiagnosticsContent: View {
         } else if !runner.isBusy, runner.untestedCheckCount > 0 {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(LocalizedStringResource("diagnostics.summary.untested", defaultValue: "This setup hasn't been fully checked"))
+                    Text(LocalizedStringResource("diagnostics.summary.untested", defaultValue: "This setup hasn't been fully checked", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                     scopedCheckLine
                 }
@@ -421,8 +421,8 @@ struct DiagnosticsContent: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(LocalizedStringResource(
                     "diagnostics.summary.lastChecked",
-                    defaultValue: "Full check run \(lastChecked.formatted(.relative(presentation: .named)))"
-                ))
+                    defaultValue: "Full check run \(lastChecked.formatted(.relative(presentation: .named).locale(AppLocalization.locale)))"
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
                 scopedCheckLine
@@ -433,7 +433,7 @@ struct DiagnosticsContent: View {
             Text(LocalizedStringResource(
                 "diagnostics.summary.notCheckedYet",
                 defaultValue: "Setup looks right — tap Test everything to check the connection"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -452,15 +452,15 @@ struct DiagnosticsContent: View {
         if let at = runner.chatSuccesses[ref] {
             Text(LocalizedStringResource(
                 "diagnostics.gateway.chatProven",
-                defaultValue: "Last reply received \(at.formatted(.relative(presentation: .named)))"
-            ))
+                defaultValue: "Last reply received \(at.formatted(.relative(presentation: .named).locale(AppLocalization.locale)))"
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
         } else {
             Text(LocalizedStringResource(
                 "diagnostics.gateway.chatUnproven",
                 defaultValue: "No reply received on this device yet"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -477,8 +477,8 @@ struct DiagnosticsContent: View {
            let entry = runner.gatewayDisplayOrder.first(where: { $0.ref == scoped.ref }) {
             Text(LocalizedStringResource(
                 "diagnostics.summary.scopedCheck",
-                defaultValue: "\(entry.displayName) checked \(scoped.date.formatted(.relative(presentation: .named)))"
-            ))
+                defaultValue: "\(entry.displayName) checked \(scoped.date.formatted(.relative(presentation: .named).locale(AppLocalization.locale)))"
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -515,7 +515,7 @@ struct DiagnosticsContent: View {
                                 .padding(.leading, 30)
                                 .accessibilityLabel(Text(LocalizedStringResource(
                                     "diagnostics.action.recheckGateway.a11y",
-                                    defaultValue: "Check the connection to \(entry.displayName) again")))
+                                    defaultValue: "Check the connection to \(entry.displayName) again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                         } else {
                             HStack(alignment: .top, spacing: 10) {
                                 DiagnosticCheckRow(check: check, titleOverride: entry.displayName)
@@ -524,7 +524,7 @@ struct DiagnosticsContent: View {
                                     .fixedSize(horizontal: true, vertical: false)
                                     .accessibilityLabel(Text(LocalizedStringResource(
                                         "diagnostics.action.recheckGateway.a11y",
-                                        defaultValue: "Check the connection to \(entry.displayName) again")))
+                                        defaultValue: "Check the connection to \(entry.displayName) again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                             }
                         }
                         chatProvenLine(for: entry.ref)
@@ -554,7 +554,7 @@ struct DiagnosticsContent: View {
                     .settingsCardPassiveRow()
             }
         } header: {
-            Text(LocalizedStringResource("diagnostics.section.connection", defaultValue: "Connection"))
+            Text(LocalizedStringResource("diagnostics.section.connection", defaultValue: "Connection", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         // NO footer restating "nothing can send", and none may be added back.
         // One existed to carry that conclusion while the per-gateway rows were
@@ -599,7 +599,7 @@ struct DiagnosticsContent: View {
             showingDefaultPicker = true
         } label: {
             Label(
-                LocalizedStringResource("diagnostics.action.chooseGateway", defaultValue: "Choose Gateway"),
+                LocalizedStringResource("diagnostics.action.chooseGateway", defaultValue: "Choose Gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "brain.head.profile"
             )
             .font(.subheadline.weight(.semibold))
@@ -609,7 +609,7 @@ struct DiagnosticsContent: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "diagnostics.action.chooseGateway.a11y",
             defaultValue: "Choose which gateway new chats use"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     /// The named form of the row's detail — view-only, so it may carry the user's
@@ -624,18 +624,18 @@ struct DiagnosticsContent: View {
             return String(
                 localized: "diagnostics.connection.defaultGateway.ok.named",
                 defaultValue: "New chats and the GigaAction Shortcut start on \(name)."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .autoAdopted:
             guard let replaced = standing.replacedName else {
                 return String(
                     localized: "diagnostics.connection.defaultGateway.adopted",
                     defaultValue: "Conduck switched your default because the old one isn't available here."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return String(
                 localized: "diagnostics.connection.defaultGateway.adopted.named",
                 defaultValue: "New chats and the GigaAction Shortcut start on \(name) — Conduck switched to it because \(replaced) isn't available here."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // Both arms end on the picker callout's own sentence, verbatim
         // (`settings.personalAI.default.picker.unavailable.body`), so the user meets
         // the identical claim on both screens rather than two paraphrases to
@@ -647,23 +647,23 @@ struct DiagnosticsContent: View {
                 return String(
                     localized: "diagnostics.connection.defaultGateway.unavailable.named.one",
                     defaultValue: "\(name) is your default for new chats, but it isn't available on this device — so new chats and the GigaAction Shortcut won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to \(only)."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return String(
                 localized: "diagnostics.connection.defaultGateway.unavailable.named",
                 defaultValue: "\(name) is your default for new chats, but it isn't available on this device — so new chats and the GigaAction Shortcut won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to one of your \(count) working gateways."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .notChosen:
             if count == 1 {
                 return String(
                     localized: "diagnostics.connection.defaultGateway.notChosen.named.one",
                     defaultValue: "Conduck doesn't know which AI new chats should use, so new chats and the GigaAction Shortcut won't go anywhere. Pick \(only)."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return String(
                 localized: "diagnostics.connection.defaultGateway.notChosen.named",
                 defaultValue: "Conduck doesn't know which AI new chats should use, so new chats and the GigaAction Shortcut won't go anywhere. Pick one of your \(count) gateways."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -710,7 +710,7 @@ struct DiagnosticsContent: View {
             picker
             HStack {
                 Spacer()
-                Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     showingDefaultPicker = false
                 }
                 .keyboardShortcut(.cancelAction)
@@ -725,7 +725,7 @@ struct DiagnosticsContent: View {
             picker
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                        Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                             showingDefaultPicker = false
                         }
                     }
@@ -747,7 +747,7 @@ struct DiagnosticsContent: View {
         Section {
             if let setup = runner.activeVoiceSetup {
                 voiceSetupRow(
-                    title: LocalizedStringResource("diagnostics.voice.setup.stt", defaultValue: "Speech-to-Text"),
+                    title: LocalizedStringResource("diagnostics.voice.setup.stt", defaultValue: "Speech-to-Text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     providerName: setup.sttName,
                     status: setup.sttStatus,
                     systemImage: "waveform"
@@ -785,13 +785,13 @@ struct DiagnosticsContent: View {
                       || (runner.transcriptionTestPrerequisite != nil && runner.permissionAction(for: .speechRecognition) == nil))
             transcriptionTestResult
         } header: {
-            Text(LocalizedStringResource("diagnostics.section.voice", defaultValue: "Voice"))
+            Text(LocalizedStringResource("diagnostics.section.voice", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
 
         Section {
             if let setup = runner.activeVoiceSetup {
                 voiceSetupRow(
-                    title: LocalizedStringResource("diagnostics.voice.setup.tts", defaultValue: "Text-to-Speech"),
+                    title: LocalizedStringResource("diagnostics.voice.setup.tts", defaultValue: "Text-to-Speech", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     providerName: setup.ttsName,
                     status: setup.ttsStatus,
                     keyState: setup.ttsKeyState,
@@ -802,7 +802,7 @@ struct DiagnosticsContent: View {
                 Task { await runner.runVoicePreview() }
             } label: {
                 Label(
-                    LocalizedStringResource("diagnostics.action.previewVoice", defaultValue: "Test voice playback"),
+                    LocalizedStringResource("diagnostics.action.previewVoice", defaultValue: "Test voice playback", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "speaker.wave.2"
                 )
                 .labelStyle(AccentGlyphActionLabelStyle())
@@ -819,17 +819,17 @@ struct DiagnosticsContent: View {
             Text(LocalizedStringResource(
                 "diagnostics.footer.voice",
                 defaultValue: "Uses your selected providers. Cloud providers may charge for these tests."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
     private var transcriptionActionTitle: LocalizedStringResource {
         guard let permission = runner.transcriptionTestPrerequisite else {
-            return LocalizedStringResource("diagnostics.action.testTranscription", defaultValue: "Test with sample audio")
+            return LocalizedStringResource("diagnostics.action.testTranscription", defaultValue: "Test with sample audio", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return runner.permissionAction(for: permission) == .openSettings
-            ? LocalizedStringResource("diagnostics.action.openSpeechSettings", defaultValue: "Open speech settings")
-            : LocalizedStringResource("diagnostics.action.allowSpeech", defaultValue: "Allow speech recognition")
+            ? LocalizedStringResource("diagnostics.action.openSpeechSettings", defaultValue: "Open speech settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("diagnostics.action.allowSpeech", defaultValue: "Allow speech recognition", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     private func voiceSetupRow(
@@ -864,11 +864,11 @@ struct DiagnosticsContent: View {
                          ? LocalizedStringResource(
                             "diagnostics.voice.setup.keyUnreadable",
                             defaultValue: "A key is saved for this provider but can't be read back — re-enter it in Voice settings."
-                         )
+                         , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                          : LocalizedStringResource(
                             "diagnostics.voice.setup.needsSetup",
                             defaultValue: "Needs setup — finish this provider in Voice settings."
-                         ))
+                         , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.warning)
                 }
@@ -947,9 +947,9 @@ struct DiagnosticsContent: View {
                             Text(LocalizedStringResource(
                                 "diagnostics.permission.allow",
                                 defaultValue: "Allow"
-                            ))
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         case .openSettings:
-                            Text(LocalizedStringResource("Open Settings", defaultValue: "Open Settings"))
+                            Text(LocalizedStringResource("Open Settings", defaultValue: "Open Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                 .foregroundStyle(AppColors.textPrimary)
                         }
                     }
@@ -1012,20 +1012,20 @@ struct DiagnosticsContent: View {
         switch runner.voicePreview {
         case .idle:
             if runner.voicePreviewNeedsTest {
-                Text(LocalizedStringResource("diagnostics.voice.playback.notTested", defaultValue: "Playback hasn't been tested for this setup. This test speaks aloud."))
+                Text(LocalizedStringResource("diagnostics.voice.playback.notTested", defaultValue: "Playback hasn't been tested for this setup. This test speaks aloud.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption).foregroundStyle(AppColors.textSecondary)
                     .settingsCardPassiveRow()
             }
         case .preparing, .playing:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(LocalizedStringResource("diagnostics.voice.playing", defaultValue: "Playing a sample…"))
+                Text(LocalizedStringResource("diagnostics.voice.playing", defaultValue: "Playing a sample…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption).foregroundStyle(AppColors.textSecondary)
             }
             .settingsCardPassiveRow()
         case .done:
             Label {
-                Text(LocalizedStringResource("diagnostics.voice.played", defaultValue: "Played a sample"))
+                Text(LocalizedStringResource("diagnostics.voice.played", defaultValue: "Played a sample", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption).foregroundStyle(AppColors.textSecondary)
             } icon: {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(AppColors.success)
@@ -1075,7 +1075,7 @@ struct DiagnosticsContent: View {
             Button {
                 editingFileLane = lane
             } label: {
-                Label(LocalizedStringResource("diagnostics.files.settings", defaultValue: "File server settings"), systemImage: "slider.horizontal.3")
+                Label(LocalizedStringResource("diagnostics.files.settings", defaultValue: "File server settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "slider.horizontal.3")
                     .font(.subheadline)
             }
             .buttonStyle(.bordered)
@@ -1087,7 +1087,7 @@ struct DiagnosticsContent: View {
                 )) {
                     FileTransferStageChecklist(result: result)
                 } label: {
-                    Text(LocalizedStringResource("diagnostics.files.testDetails", defaultValue: "Test details"))
+                    Text(LocalizedStringResource("diagnostics.files.testDetails", defaultValue: "Test details", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                 }
             }
@@ -1112,7 +1112,7 @@ struct DiagnosticsContent: View {
                 .frame(width: 20)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(LocalizedStringResource("diagnostics.files.serverLabel", defaultValue: "File server"))
+                Text(LocalizedStringResource("diagnostics.files.serverLabel", defaultValue: "File server", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(AppColors.textPrimary)
                 Text(badge.text)
@@ -1146,12 +1146,12 @@ struct DiagnosticsContent: View {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel(Text(LocalizedStringResource(
-                        "diagnostics.action.testing", defaultValue: "Testing…")))
+                        "diagnostics.action.testing", defaultValue: "Testing…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             } else {
                 // Same CTA name + glyph as every other surface's staged
                 // file-server test (editor, setup guide).
                 Label(
-                    LocalizedStringResource("settings.fileTransfer.testConnection.button", defaultValue: "Test file server"),
+                    LocalizedStringResource("settings.fileTransfer.testConnection.button", defaultValue: "Test file server", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "checkmark.shield"
                 )
                 .font(.subheadline.weight(.semibold))
@@ -1162,7 +1162,7 @@ struct DiagnosticsContent: View {
         .disabled(runner.fileTransferTestRunning.contains(lane.ref) || runner.isRunningAllTests)
         .accessibilityLabel(Text(LocalizedStringResource(
             "diagnostics.action.testFileServer.a11y",
-            defaultValue: "Test file-server connection for \(lane.displayName)")))
+            defaultValue: "Test file-server connection for \(lane.displayName)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     /// This lane's badge, with the runner supplying the return-direction caveat.
@@ -1217,7 +1217,7 @@ struct DiagnosticsContent: View {
                 return ("info.circle", AppColors.textSecondary,
                         LocalizedStringResource(
                             "diagnostics.files.badge.enabled.uploadsOnly",
-                            defaultValue: "Uploads enabled — server can't list folders"))
+                            defaultValue: "Uploads enabled — server can't list folders", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             case .returnUnchecked:
                 // Same reasoning, one step weaker: the seal has to come off for "we
                 // could not check" as much as for "it cannot", because the user is
@@ -1226,7 +1226,7 @@ struct DiagnosticsContent: View {
                 return ("info.circle", AppColors.textSecondary,
                         LocalizedStringResource(
                             "diagnostics.files.badge.enabled.returnUnchecked",
-                            defaultValue: "Uploads enabled — returns unchecked"))
+                            defaultValue: "Uploads enabled — returns unchecked", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             case nil:
                 break
             }
@@ -1237,18 +1237,18 @@ struct DiagnosticsContent: View {
             // armed makes that more urgent, not less.
             return ("xmark.circle.fill", AppColors.error, routingEnabled
                     ? LocalizedStringResource("diagnostics.files.badge.enabled.failed",
-                                              defaultValue: "Uploads still enabled — last check failed")
+                                              defaultValue: "Uploads still enabled — last check failed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     : LocalizedStringResource("diagnostics.files.badge.disabled.failed",
-                                              defaultValue: "Uploads disabled — last check failed"))
+                                              defaultValue: "Uploads disabled — last check failed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .unconfirmed:
             // "Check", not "writes": the reach probe never attempted a write, so
             // calling the WRITES unconfirmed would discount a staged pass this lane
             // may well still be carrying.
             return ("exclamationmark.triangle.fill", AppColors.warning, routingEnabled
                     ? LocalizedStringResource("diagnostics.files.badge.enabled.inconclusive",
-                                              defaultValue: "Uploads still enabled — last check inconclusive")
+                                              defaultValue: "Uploads still enabled — last check inconclusive", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     : LocalizedStringResource("diagnostics.files.badge.disabled.inconclusive",
-                                              defaultValue: "Uploads disabled — last check inconclusive"))
+                                              defaultValue: "Uploads disabled — last check inconclusive", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .verified:
             // The routing fact ALONE. An evidence clause here ("— test passed")
             // re-committed the exact sin this row was rewritten to stop: the flag
@@ -1258,19 +1258,19 @@ struct DiagnosticsContent: View {
             // checklist below reports the session's real test when there is one.
             return ("checkmark.seal.fill", AppColors.success,
                     LocalizedStringResource("diagnostics.files.badge.enabled",
-                                            defaultValue: "Uploads enabled"))
+                                            defaultValue: "Uploads enabled", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .testing:
             return ("ellipsis.circle", AppColors.textSecondary,
-                    LocalizedStringResource("diagnostics.files.badge.testing", defaultValue: "Testing…"))
+                    LocalizedStringResource("diagnostics.files.badge.testing", defaultValue: "Testing…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .configuredNotTested:
             // Optional setup is neutral. The summary records the missing test,
             // while this row states the consequence and offers both Test and Settings.
             return ("info.circle", AppColors.textSecondary,
                     LocalizedStringResource("diagnostics.files.badge.disabled.testRequired",
-                                            defaultValue: "Uploads disabled — test required"))
+                                            defaultValue: "Uploads disabled — test required", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .notSetUp:
             return ("minus.circle", AppColors.textTertiary,
-                    LocalizedStringResource("diagnostics.files.badge.notSetUp", defaultValue: "Not set up"))
+                    LocalizedStringResource("diagnostics.files.badge.notSetUp", defaultValue: "Not set up", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -1284,7 +1284,7 @@ struct DiagnosticsContent: View {
         guard badge == .configuredNotTested else { return nil }
         return LocalizedStringResource(
             "diagnostics.files.detail.testRequired",
-            defaultValue: "Run the test to enable uploads, or remove the server in File server settings.")
+            defaultValue: "Run the test to enable uploads, or remove the server in File server settings.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     // MARK: Capabilities and permissions
@@ -1296,7 +1296,7 @@ struct DiagnosticsContent: View {
             Text(LocalizedStringResource(
                 "diagnostics.section.capability",
                 defaultValue: "Capabilities and Permissions"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -1313,7 +1313,7 @@ struct DiagnosticsContent: View {
                 }
             }
         } header: {
-            Text(LocalizedStringResource("diagnostics.section.sync", defaultValue: "Sync"))
+            Text(LocalizedStringResource("diagnostics.section.sync", defaultValue: "Sync", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -1371,10 +1371,10 @@ struct DiagnosticsContent: View {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel(Text(LocalizedStringResource(
-                        "diagnostics.action.checkingWatch", defaultValue: "Checking…")))
+                        "diagnostics.action.checkingWatch", defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             } else {
                 Label(
-                    LocalizedStringResource("diagnostics.action.checkWatch", defaultValue: "Check"),
+                    LocalizedStringResource("diagnostics.action.checkWatch", defaultValue: "Check", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "arrow.clockwise"
                 )
                 .font(.subheadline.weight(.semibold))
@@ -1384,7 +1384,7 @@ struct DiagnosticsContent: View {
         .buttonStyle(.bordered)
         .disabled(runner.isCheckingWatch || runner.isRunningAllTests)
         .accessibilityLabel(Text(LocalizedStringResource(
-            "diagnostics.action.checkWatch.a11y", defaultValue: "Check Apple Watch")))
+            "diagnostics.action.checkWatch.a11y", defaultValue: "Check Apple Watch", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     /// The nested health readout. A failed/unsupported refresh PRESERVES the
@@ -1397,12 +1397,12 @@ struct DiagnosticsContent: View {
             case .reply(let state):
                 watchHealthFacts(state)
             case .unsupported:
-                Text(LocalizedStringResource("diagnostics.watch.unsupported", defaultValue: "The watch responded, but its Conduck version doesn't support health checks yet — update the app on the watch."))
+                Text(LocalizedStringResource("diagnostics.watch.unsupported", defaultValue: "The watch responded, but its Conduck version doesn't support health checks yet — update the app on the watch.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                 if let last = runner.watchHealth { watchHealthFacts(last, stale: true) }
             case .noResponse:
-                Text(LocalizedStringResource("diagnostics.watch.noResponse", defaultValue: "Watch didn't respond. Open Conduck on your Watch, then check again."))
+                Text(LocalizedStringResource("diagnostics.watch.noResponse", defaultValue: "Watch didn't respond. Open Conduck on your Watch, then check again.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                 if let last = runner.watchHealth { watchHealthFacts(last, stale: true) }
@@ -1420,8 +1420,8 @@ struct DiagnosticsContent: View {
     private func watchHealthFacts(_ state: WatchHealthState, stale: Bool = false) -> some View {
         if stale {
             Text(String(
-                format: String(localized: "diagnostics.watch.staleFacts", defaultValue: "Last check from %@:"),
-                state.receivedAt.formatted(.relative(presentation: .named))
+                format: String(localized: "diagnostics.watch.staleFacts", defaultValue: "Last check from %@:", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
+                state.receivedAt.formatted(.relative(presentation: .named).locale(AppLocalization.locale))
             ))
             .font(.caption)
             .foregroundStyle(AppColors.textTertiary)
@@ -1429,17 +1429,17 @@ struct DiagnosticsContent: View {
         switch state.settingsFreshness {
         case .current:
             Text(String(
-                format: String(localized: "diagnostics.watch.settings.current", defaultValue: "Watch accepted the latest settings %@."),
-                Date(timeIntervalSinceReferenceDate: state.agentEnvelopeTs).formatted(.relative(presentation: .named))
+                format: String(localized: "diagnostics.watch.settings.current", defaultValue: "Watch accepted the latest settings %@.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
+                Date(timeIntervalSinceReferenceDate: state.agentEnvelopeTs).formatted(.relative(presentation: .named).locale(AppLocalization.locale))
             ))
             .font(.caption)
             .foregroundStyle(AppColors.textSecondary)
         case .behind:
-            Text(LocalizedStringResource("diagnostics.watch.settings.behind", defaultValue: "The watch hasn't received the latest settings yet — updates deliver when it's awake and nearby."))
+            Text(LocalizedStringResource("diagnostics.watch.settings.behind", defaultValue: "The watch hasn't received the latest settings yet — updates deliver when it's awake and nearby.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textSecondary)
         case .never:
-            Text(LocalizedStringResource("diagnostics.watch.settings.never", defaultValue: "The watch hasn't accepted settings from this iPhone yet."))
+            Text(LocalizedStringResource("diagnostics.watch.settings.never", defaultValue: "The watch hasn't accepted settings from this iPhone yet.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textSecondary)
         case .unknown:
@@ -1447,7 +1447,7 @@ struct DiagnosticsContent: View {
         }
         if let depth = state.relayQueueDepth, depth > 0 {
             Text(String(
-                format: String(localized: "diagnostics.watch.relayQueue", defaultValue: "%lld recording(s) waiting on the watch to transcribe — they process when the watch reaches this iPhone."),
+                format: String(localized: "diagnostics.watch.relayQueue", defaultValue: "%lld recording(s) waiting on the watch to transcribe — they process when the watch reaches this iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 Int64(depth)
             ))
             .font(.caption)
@@ -1455,7 +1455,7 @@ struct DiagnosticsContent: View {
         }
         if state.micPermission == "denied" {
             Label {
-                Text(LocalizedStringResource("diagnostics.watch.micDenied", defaultValue: "Microphone is off on the watch — allow it in the Watch app's settings to record from the wrist."))
+                Text(LocalizedStringResource("diagnostics.watch.micDenied", defaultValue: "Microphone is off on the watch — allow it in the Watch app's settings to record from the wrist.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.warning)
             } icon: {
@@ -1465,7 +1465,7 @@ struct DiagnosticsContent: View {
         }
         if state.notificationPermission == "denied" {
             Label {
-                Text(LocalizedStringResource("diagnostics.watch.notifDenied", defaultValue: "Notifications are off on the watch — replies to wrist asks won't alert there."))
+                Text(LocalizedStringResource("diagnostics.watch.notifDenied", defaultValue: "Notifications are off on the watch — replies to wrist asks won't alert there.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
             } icon: {
@@ -1502,8 +1502,8 @@ struct DiagnosticsContent: View {
             } label: {
                 Label(
                     copied
-                        ? LocalizedStringResource("diagnostics.action.copied", defaultValue: "Copied")
-                        : LocalizedStringResource("diagnostics.action.copy", defaultValue: "Copy Diagnostics"),
+                        ? LocalizedStringResource("diagnostics.action.copied", defaultValue: "Copied", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("diagnostics.action.copy", defaultValue: "Copy Diagnostics", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: copied ? "checkmark" : "doc.on.doc"
                 )
                 .font(.body.weight(.bold))
@@ -1534,7 +1534,7 @@ struct DiagnosticsContent: View {
             Text(LocalizedStringResource(
                 "diagnostics.footer.copy",
                 defaultValue: "Copies a safe summary you can paste anywhere. No links, keys, or message content are included."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 

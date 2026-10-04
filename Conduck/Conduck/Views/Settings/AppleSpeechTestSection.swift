@@ -45,12 +45,12 @@ struct AppleSpeechTestSection: View {
                 // `Form` supplies the identical inset.
                 .settingsCardPassiveRow()
         } header: {
-            Text(LocalizedStringResource("settings.voice.apple.test.header", defaultValue: "Try voice"))
+            Text(LocalizedStringResource("settings.voice.apple.test.header", defaultValue: "Try voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.voice.apple.test.footer",
                 defaultValue: "Uses the engine selected above and your speech language. Your recording isn't saved."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -59,7 +59,7 @@ struct AppleSpeechTestSection: View {
         switch viewModel.appleSpeechTester.state {
         case .idle:
             recordButton(label: LocalizedStringResource(
-                "settings.voice.apple.test.record", defaultValue: "Record a test"))
+                "settings.voice.apple.test.record", defaultValue: "Record a test", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .recording(let startedAt):
             recordingControls(startedAt: startedAt)
         case .transcribing:
@@ -94,7 +94,7 @@ struct AppleSpeechTestSection: View {
                 Text(LocalizedStringResource(
                     "settings.voice.apple.test.needsModel",
                     defaultValue: "Setting up voice for this language — try again in a moment."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
             }
@@ -111,7 +111,7 @@ struct AppleSpeechTestSection: View {
                 Task { await viewModel.appleSpeechTester.stop() }
             } label: {
                 Label(
-                    LocalizedStringResource("settings.voice.apple.test.stop", defaultValue: "Stop"),
+                    LocalizedStringResource("settings.voice.apple.test.stop", defaultValue: "Stop", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "stop.fill"
                 )
                 .font(.subheadline.weight(.semibold))
@@ -127,7 +127,7 @@ struct AppleSpeechTestSection: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(LocalizedStringResource(
-                        "settings.voice.apple.test.heard", defaultValue: "Apple heard"))
+                        "settings.voice.apple.test.heard", defaultValue: "Apple heard", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.textTertiary)
                     Text(verbatim: "·")
@@ -144,7 +144,7 @@ struct AppleSpeechTestSection: View {
                     .textSelection(.enabled)
             }
             recordButton(label: LocalizedStringResource(
-                "settings.voice.apple.test.recordAgain", defaultValue: "Record again"))
+                "settings.voice.apple.test.recordAgain", defaultValue: "Record again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -152,10 +152,10 @@ struct AppleSpeechTestSection: View {
         switch engine {
         case .dictation:
             return String(localized: LocalizedStringResource(
-                "settings.voice.apple.test.via.standard", defaultValue: "via Standard"))
+                "settings.voice.apple.test.via.standard", defaultValue: "via Standard", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .highQuality:
             return String(localized: LocalizedStringResource(
-                "settings.voice.apple.test.via.highQuality", defaultValue: "via High quality"))
+                "settings.voice.apple.test.via.highQuality", defaultValue: "via High quality", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -172,7 +172,7 @@ struct AppleSpeechTestSection: View {
                     .multilineTextAlignment(.leading)
             }
             recordButton(label: LocalizedStringResource(
-                "settings.voice.apple.test.recordAgain", defaultValue: "Record again"))
+                "settings.voice.apple.test.recordAgain", defaultValue: "Record again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 }

@@ -37,7 +37,7 @@ struct UsageAllThreadsView: View {
 
     private var title: String {
         String(localized: "settings.usage.detail.threads.title",
-               defaultValue: "Heaviest conversations")
+               defaultValue: "Heaviest conversations", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     var body: some View {
@@ -73,7 +73,7 @@ struct UsageAllThreadsView: View {
                 defaultValue: """
                     No conversation in this range can be ranked — your gateway \
                     reported no token usage for any of them.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
@@ -89,7 +89,7 @@ struct UsageAllThreadsView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.detail.threads.header", defaultValue: "Conversations"))
+                "settings.usage.detail.threads.header", defaultValue: "Conversations", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text(UsageDetailFormat.threadBasisFooter(ranking.basis))
@@ -167,7 +167,7 @@ struct UsageThreadRow: View {
             if !isOpenable {
                 Text(LocalizedStringResource(
                     "settings.usage.detail.threads.unavailable",
-                    defaultValue: "Conversation unavailable"))
+                    defaultValue: "Conversation unavailable", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
             }
@@ -210,7 +210,7 @@ struct UsageTurnRow: View {
     private func content(chevron: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(verbatim: turn.startedAt.formatted(date: .abbreviated, time: .shortened))
+                Text(verbatim: turn.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened, locale: AppLocalization.locale)))
                     .foregroundStyle(AppColors.textPrimary)
                 Spacer(minLength: 8)
                 Text(verbatim: UsageThreadFormat.tokensText(turn.tokens))
@@ -233,7 +233,7 @@ struct UsageTurnRow: View {
             if !isOpenable {
                 Text(LocalizedStringResource(
                     "settings.usage.detail.threads.unavailable",
-                    defaultValue: "Conversation unavailable"))
+                    defaultValue: "Conversation unavailable", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
             }
@@ -252,16 +252,16 @@ enum UsageThreadFormat {
     /// A span, collapsed to one date when a conversation lived inside a single
     /// day. Two identical dates joined by a dash reads as a bug.
     static func dateSpan(from first: Date, to last: Date) -> String {
-        let firstText = first.formatted(date: .abbreviated, time: .omitted)
+        let firstText = first.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: AppLocalization.locale))
         guard !Calendar.current.isDate(first, inSameDayAs: last) else { return firstText }
         return String(
             localized: "settings.usage.detail.threads.span",
-            defaultValue: "\(firstText) – \(last.formatted(date: .abbreviated, time: .omitted))")
+            defaultValue: "\(firstText) – \(last.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: AppLocalization.locale)))", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     static func tokensText(_ tokens: Int) -> String {
         String(localized: "settings.usage.detail.threads.tokens",
-               defaultValue: "\(tokens.formatted(.number)) tokens")
+               defaultValue: "\(tokens.formatted(.number.locale(AppLocalization.locale))) tokens", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Every distinct slot the thread ran on, in the order it first used them —
@@ -271,7 +271,7 @@ enum UsageThreadFormat {
         let names = refs.map { UsageGatewayLabel.name(for: $0, roster: roster) }
         guard !names.isEmpty else {
             return String(localized: "settings.usage.gateway.unattributed",
-                          defaultValue: "Not recorded")
+                          defaultValue: "Not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return names.joined(separator: " · ")
     }
@@ -283,7 +283,7 @@ enum UsageThreadFormat {
         var parts: [String] = [UsageDetailFormat.attemptsText(thread.attempts)]
         parts.append(String(
             localized: "settings.usage.detail.threads.coverage",
-            defaultValue: "\(thread.tokenReportedTurns) of \(thread.turns) turns reported"))
+            defaultValue: "\(thread.tokenReportedTurns) of \(thread.turns) turns reported", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         if let carried = carriedText(
             images: thread.inlineImageCount, files: thread.inlineTextFileCount) {
             parts.append(carried)
@@ -292,7 +292,7 @@ enum UsageThreadFormat {
            thread.attachmentMeasuredAttempts < thread.attempts {
             parts.append(String(
                 localized: "settings.usage.detail.threads.measured",
-                defaultValue: "measured on \(thread.attachmentMeasuredAttempts)"))
+                defaultValue: "measured on \(thread.attachmentMeasuredAttempts)", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         return parts.joined(separator: " · ")
     }
@@ -305,12 +305,12 @@ enum UsageThreadFormat {
         if let images, images > 0 {
             parts.append(String(
                 localized: "settings.usage.detail.threads.images",
-                defaultValue: "\(images) images"))
+                defaultValue: "\(images) images", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         if let files, files > 0 {
             parts.append(String(
                 localized: "settings.usage.detail.threads.files",
-                defaultValue: "\(files) files"))
+                defaultValue: "\(files) files", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

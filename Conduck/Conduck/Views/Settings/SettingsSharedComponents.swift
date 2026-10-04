@@ -77,7 +77,7 @@ func feedbackMailtoURL() -> URL? {
     components.scheme = "mailto"
     components.path = Constants.feedbackEmail
     components.queryItems = [
-        URLQueryItem(name: "subject", value: String(localized: "Conduck Feedback")), // xcstrings
+        URLQueryItem(name: "subject", value: String(localized: "Conduck Feedback", bundle: AppLocalization.bundle, locale: AppLocalization.locale)), // xcstrings
         URLQueryItem(name: "body", value: feedbackEmailBody()),
     ]
     return components.url

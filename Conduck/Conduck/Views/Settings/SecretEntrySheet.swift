@@ -61,7 +61,7 @@ struct SecretEntrySheet: View {
                 Button(role: .cancel) {
                     dismiss()
                 } label: {
-                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
+                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .foregroundStyle(AppColors.textPrimary)
                 }
                 .keyboardShortcut(.cancelAction)
@@ -69,7 +69,7 @@ struct SecretEntrySheet: View {
                     onCommit(draft)
                     dismiss()
                 } label: {
-                    Text(LocalizedStringResource("settings.secret.done", defaultValue: "Done"))
+                    Text(LocalizedStringResource("settings.secret.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .fontWeight(.semibold)
                         .foregroundStyle(AppColors.textPrimary)
                 }

@@ -175,30 +175,30 @@ struct ProviderConfigBody: View {
     private var appleManageLabel: LocalizedStringResource {
         #if os(macOS)
         // xcstrings: apple-voice-trim
-        LocalizedStringResource("settings.stt.provider.apple.delete.macos", defaultValue: "About on-device storage")
+        LocalizedStringResource("settings.stt.provider.apple.delete.macos", defaultValue: "About on-device storage", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #else
         // xcstrings: apple-voice-trim
-        LocalizedStringResource("settings.stt.provider.apple.delete", defaultValue: "Manage in Settings")
+        LocalizedStringResource("settings.stt.provider.apple.delete", defaultValue: "Manage in Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #endif
     }
 
     private var appleManageAlertTitle: LocalizedStringResource {
         #if os(macOS)
         // xcstrings: apple-voice-trim
-        LocalizedStringResource("settings.stt.provider.apple.deleteAlert.title.macos", defaultValue: "On-device speech model")
+        LocalizedStringResource("settings.stt.provider.apple.deleteAlert.title.macos", defaultValue: "On-device speech model", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #else
         // xcstrings: apple-voice-trim
-        LocalizedStringResource("settings.stt.provider.apple.deleteAlert.title", defaultValue: "Manage in Settings?")
+        LocalizedStringResource("settings.stt.provider.apple.deleteAlert.title", defaultValue: "Manage in Settings?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #endif
     }
 
     private var appleManageAlertMessage: LocalizedStringResource {
         #if os(macOS)
         // xcstrings: apple-voice-trim
-        LocalizedStringResource("settings.stt.provider.apple.deleteAlert.message.macos", defaultValue: "macOS manages the on-device speech model automatically and reclaims its space when needed. There's nothing to remove here.")
+        LocalizedStringResource("settings.stt.provider.apple.deleteAlert.message.macos", defaultValue: "macOS manages the on-device speech model automatically and reclaims its space when needed. There's nothing to remove here.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #else
         // xcstrings: apple-voice-trim
-        LocalizedStringResource("settings.stt.provider.apple.deleteAlert.message", defaultValue: "iOS manages the on-device model. To remove it, open Settings, then go to General → iPhone Storage → Conduck.")
+        LocalizedStringResource("settings.stt.provider.apple.deleteAlert.message", defaultValue: "iOS manages the on-device model. To remove it, open Settings, then go to General → iPhone Storage → Conduck.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #endif
     }
 
@@ -227,18 +227,18 @@ struct ProviderConfigBody: View {
         .alert(appleManageAlertTitle, isPresented: $showingDeleteConfirm) {
             #if os(iOS)
             // xcstrings: apple-voice-trim
-            Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.openSettings", defaultValue: "Open Settings")) {
+            Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.openSettings", defaultValue: "Open Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 onDeleteAppleModel?()
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
             }
-            Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.cancel", defaultValue: "Cancel"), role: .cancel) { } // xcstrings
+            Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) { } // xcstrings
             #else
             // macOS: informational-only (system-managed; no per-model delete
             // target to deep-link to) — a single dismiss, never a dead action.
             // xcstrings: apple-voice-trim
-            Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.ok", defaultValue: "OK"), role: .cancel) { }
+            Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.ok", defaultValue: "OK", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) { }
             #endif
         } message: {
             Text(appleManageAlertMessage)
@@ -385,7 +385,7 @@ struct ProviderConfigBody: View {
                 .font(.headline)
                 .foregroundStyle(AppColors.textPrimary)
             if case .storedActive = state {
-                Text(LocalizedStringResource("settings.stt.provider.activeBadge", defaultValue: "Active")) // xcstrings
+                Text(LocalizedStringResource("settings.stt.provider.activeBadge", defaultValue: "Active", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) // xcstrings
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.background)
                     .padding(.horizontal, 8)
@@ -404,7 +404,7 @@ struct ProviderConfigBody: View {
     private var stateBody: some View {
         switch state {
         case .empty:
-            entryFields(buttonLabel: LocalizedStringResource("settings.stt.provider.validateAndSave", defaultValue: "Validate & Save")) // xcstrings
+            entryFields(buttonLabel: LocalizedStringResource("settings.stt.provider.validateAndSave", defaultValue: "Validate & Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) // xcstrings
 
         case .storedInactive(let masked):
             storedRow(masked: masked, isActive: false)
@@ -415,7 +415,7 @@ struct ProviderConfigBody: View {
         case .validating:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(LocalizedStringResource("settings.stt.provider.checking", defaultValue: "Checking…")) // xcstrings
+                Text(LocalizedStringResource("settings.stt.provider.checking", defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) // xcstrings
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -430,7 +430,7 @@ struct ProviderConfigBody: View {
                         .foregroundStyle(AppColors.error)
                         .multilineTextAlignment(.leading)
                 }
-                entryFields(buttonLabel: LocalizedStringResource("settings.stt.provider.tryAgain", defaultValue: "Try again")) // xcstrings
+                entryFields(buttonLabel: LocalizedStringResource("settings.stt.provider.tryAgain", defaultValue: "Try again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) // xcstrings
             }
         }
     }
@@ -467,7 +467,7 @@ struct ProviderConfigBody: View {
         Button(role: .destructive) {
             showingClearConfirm = true
         } label: {
-            Label(LocalizedStringResource("settings.stt.provider.clearKey", defaultValue: "Clear key"),
+            Label(LocalizedStringResource("settings.stt.provider.clearKey", defaultValue: "Clear key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                   systemImage: "trash")
                 .font(.subheadline)
         }
@@ -478,15 +478,15 @@ struct ProviderConfigBody: View {
         .settingsCardRowButton()
         .foregroundStyle(AppColors.error)
         .confirmationDialog(
-            LocalizedStringResource("settings.voice.access.clearKey.title", defaultValue: "Clear this key?"),
+            LocalizedStringResource("settings.voice.access.clearKey.title", defaultValue: "Clear this key?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: $showingClearConfirm,
             titleVisibility: .visible
         ) {
-            Button(LocalizedStringResource("settings.stt.provider.clearKey", defaultValue: "Clear key"),
+            Button(LocalizedStringResource("settings.stt.provider.clearKey", defaultValue: "Clear key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                    role: .destructive) {
                 onClear()
             }
-            Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.cancel", defaultValue: "Cancel"),
+            Button(LocalizedStringResource("settings.stt.provider.apple.deleteAlert.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                    role: .cancel) { }
         } message: {
             clearKeyConfirmMessage
@@ -519,22 +519,22 @@ struct ProviderConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.voice.access.clearKey.message.active",
                 defaultValue: "Speech-to-text and text-to-speech for \(metadata.displayName) will stop working until you add a key again. Conduck switches speech-to-text back to Apple on-device and the reply voice back to the Apple voice, on this device and on your Apple Watch."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case (true, false):
             Text(LocalizedStringResource(
                 "settings.voice.access.clearKey.message.activeSTT",
                 defaultValue: "Speech-to-text and text-to-speech for \(metadata.displayName) will stop working until you add a key again. Conduck switches speech-to-text back to Apple on-device, on this device and on your Apple Watch."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case (false, true):
             Text(LocalizedStringResource(
                 "settings.voice.access.clearKey.message.activeTTS",
                 defaultValue: "Speech-to-text and text-to-speech for \(metadata.displayName) will stop working until you add a key again. Conduck reads replies in the Apple voice instead, on this device and on your Apple Watch."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case (false, false):
             Text(LocalizedStringResource(
                 "settings.voice.access.clearKey.message",
                 defaultValue: "Speech-to-text and text-to-speech for \(metadata.displayName) will stop working until you add a key again."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -553,7 +553,7 @@ struct ProviderConfigBody: View {
                 Button {
                     onDownloadAppleModel?()
                 } label: {
-                    Label(LocalizedStringResource("settings.stt.provider.apple.download", defaultValue: "Download model (~100 MB per language)"), // xcstrings: apple-voice-trim
+                    Label(LocalizedStringResource("settings.stt.provider.apple.download", defaultValue: "Download model (~100 MB per language)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), // xcstrings: apple-voice-trim
                           systemImage: "arrow.down.circle")
                         .font(.subheadline.weight(.semibold))
                 }
@@ -565,7 +565,7 @@ struct ProviderConfigBody: View {
             VStack(alignment: .leading, spacing: 6) {
                 ProgressView(value: progress)
                     .tint(AppColors.brandAmber)
-                Text(String(localized: "Downloading… \(Int(progress * 100))%"))
+                Text(String(localized: "Downloading… \(Int(progress * 100))%", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -574,7 +574,7 @@ struct ProviderConfigBody: View {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(AppColors.success)
-                    Text(LocalizedStringResource("settings.stt.provider.apple.ready", defaultValue: "On-device · Ready"))
+                    Text(LocalizedStringResource("settings.stt.provider.apple.ready", defaultValue: "On-device · Ready", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSecondary)
                     Spacer()
@@ -603,7 +603,7 @@ struct ProviderConfigBody: View {
                     Button {
                         onDownloadAppleModel?()
                     } label: {
-                        Label(LocalizedStringResource("settings.stt.provider.tryAgain", defaultValue: "Try again"),
+                        Label(LocalizedStringResource("settings.stt.provider.tryAgain", defaultValue: "Try again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                               systemImage: "arrow.clockwise")
                             .font(.subheadline.weight(.semibold))
                     }
@@ -629,7 +629,7 @@ struct ProviderConfigBody: View {
             Button {
                 onTest()
             } label: {
-                Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice"),
+                Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                       systemImage: "checkmark.shield")
                     .font(.subheadline.weight(.semibold))
             }
@@ -703,7 +703,7 @@ struct ProviderConfigBody: View {
 
             Link(destination: metadata.consoleURL) {
                 HStack(spacing: 3) {
-                    Text(LocalizedStringResource("settings.stt.provider.getKey", defaultValue: "Get a key")) // xcstrings
+                    Text(LocalizedStringResource("settings.stt.provider.getKey", defaultValue: "Get a key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) // xcstrings
                     Image(systemName: "arrow.up.right")
                         .font(.caption2)
                 }
@@ -728,7 +728,7 @@ struct ProviderConfigBody: View {
                 Button {
                     onDownloadAppleModel?()
                 } label: {
-                    Label(LocalizedStringResource("settings.stt.provider.apple.download", defaultValue: "Download model (~100 MB per language)"), // xcstrings: apple-voice-trim
+                    Label(LocalizedStringResource("settings.stt.provider.apple.download", defaultValue: "Download model (~100 MB per language)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), // xcstrings: apple-voice-trim
                           systemImage: "arrow.down.circle")
                         .font(.subheadline.weight(.semibold))
                 }
@@ -741,7 +741,7 @@ struct ProviderConfigBody: View {
                 ProgressView(value: progress)
                     .tint(AppColors.brandAmber)
                 // xcstrings
-                Text(String(localized: "Downloading… \(Int(progress * 100))%"))
+                Text(String(localized: "Downloading… \(Int(progress * 100))%", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -749,7 +749,7 @@ struct ProviderConfigBody: View {
             HStack(spacing: 8) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(AppColors.success)
-                Text(LocalizedStringResource("settings.stt.provider.apple.ready", defaultValue: "On-device · Ready")) // xcstrings
+                Text(LocalizedStringResource("settings.stt.provider.apple.ready", defaultValue: "On-device · Ready", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) // xcstrings
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                 Spacer()
@@ -765,7 +765,7 @@ struct ProviderConfigBody: View {
                     Button {
                         onSetActive()
                     } label: {
-                        Label(LocalizedStringResource("settings.stt.provider.setActive", defaultValue: "Set as Active"), // xcstrings
+                        Label(LocalizedStringResource("settings.stt.provider.setActive", defaultValue: "Set as Active", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), // xcstrings
                               systemImage: "circle.inset.filled")
                             .font(.subheadline.weight(.semibold))
                     }
@@ -789,7 +789,7 @@ struct ProviderConfigBody: View {
                     Button {
                         onTest?()
                     } label: {
-                        Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice"),
+                        Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                               systemImage: "checkmark.shield")
                             .font(.subheadline)
                     }
@@ -815,7 +815,7 @@ struct ProviderConfigBody: View {
                     Button {
                         onDownloadAppleModel?()
                     } label: {
-                        Label(LocalizedStringResource("settings.stt.provider.tryAgain", defaultValue: "Try again"), // xcstrings
+                        Label(LocalizedStringResource("settings.stt.provider.tryAgain", defaultValue: "Try again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), // xcstrings
                               systemImage: "arrow.clockwise")
                             .font(.subheadline.weight(.semibold))
                     }
@@ -849,7 +849,7 @@ struct ProviderConfigBody: View {
                 Button {
                     onSetActive()
                 } label: {
-                    Label(LocalizedStringResource("settings.stt.provider.setActive", defaultValue: "Set as Active"), // xcstrings
+                    Label(LocalizedStringResource("settings.stt.provider.setActive", defaultValue: "Set as Active", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), // xcstrings
                           systemImage: "circle.inset.filled")
                         .font(.subheadline.weight(.semibold))
                 }
@@ -864,7 +864,7 @@ struct ProviderConfigBody: View {
                 Button {
                     onTest?()
                 } label: {
-                    Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice"),
+                    Label(LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                           systemImage: "checkmark.shield")
                         .font(.subheadline.weight(.semibold))
                 }
@@ -878,7 +878,7 @@ struct ProviderConfigBody: View {
             Button(role: .destructive) {
                 onClear()
             } label: {
-                Label(LocalizedStringResource("settings.stt.provider.clearKey", defaultValue: "Clear key"), // xcstrings
+                Label(LocalizedStringResource("settings.stt.provider.clearKey", defaultValue: "Clear key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), // xcstrings
                       systemImage: "trash")
                     .font(.subheadline)
             }
@@ -896,7 +896,7 @@ struct ProviderConfigBody: View {
         case .checking:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(LocalizedStringResource("settings.remoteAgent.testConnection.checking", defaultValue: "Checking…"))
+                Text(LocalizedStringResource("settings.remoteAgent.testConnection.checking", defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -904,7 +904,7 @@ struct ProviderConfigBody: View {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(AppColors.success)
-                Text(LocalizedStringResource("settings.remoteAgent.testConnection.success", defaultValue: "Connected"))
+                Text(LocalizedStringResource("settings.remoteAgent.testConnection.success", defaultValue: "Connected", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
             }

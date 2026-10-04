@@ -13,10 +13,10 @@ import Foundation
 /// requirements. Descriptions must not contain platform names (e.g., "Watch")
 /// — Apple rejects uploads with ITMS-90626 otherwise.
 struct RecordNoteIntent: AppIntent {
-    static var title: LocalizedStringResource = "GigaAction"
-    static var description: IntentDescription = IntentDescription(
-        LocalizedStringResource("Capture a voice transcription with Conduck")
-    )
+    static var title: LocalizedStringResource { LocalizedStringResource("GigaAction", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
+    static var description: IntentDescription { IntentDescription(
+        LocalizedStringResource("Capture a voice transcription with Conduck", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
     static var supportedModes: IntentModes = [.foreground(.immediate)]
 
     @MainActor

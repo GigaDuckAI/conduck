@@ -24,7 +24,7 @@ struct ConduckShortcuts: AppShortcutsProvider {
             // file keeps its name — `shortcuts://run-shortcut?name=GigaAction`
             // addresses it by that name, so renaming the file is a separate,
             // contract-breaking change.)
-            shortTitle: "Ask Conduck",                        // xcstrings
+            shortTitle: LocalizedStringResource("Ask Conduck", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),                        // xcstrings
             systemImageName: "mic.fill"
         )
 
@@ -37,7 +37,7 @@ struct ConduckShortcuts: AppShortcutsProvider {
             phrases: [
                 "Check \(.applicationName) is ready"          // xcstrings
             ],
-            shortTitle: "Check Conduck",                      // xcstrings
+            shortTitle: LocalizedStringResource("Check Conduck", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),                      // xcstrings
             systemImageName: "checkmark.shield"
         )
 
@@ -50,7 +50,7 @@ struct ConduckShortcuts: AppShortcutsProvider {
                 "Add a thought to my Work desk in \(.applicationName)",       // xcstrings
                 "Capture a thought in \(.applicationName)"                     // xcstrings
             ],
-            shortTitle: "Add to Work",                        // xcstrings
+            shortTitle: LocalizedStringResource("Add to Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),                        // xcstrings
             systemImageName: "tray.and.arrow.down.fill"
         )
 
@@ -64,7 +64,7 @@ struct ConduckShortcuts: AppShortcutsProvider {
                 "Add files to Work in \(.applicationName)",                    // xcstrings
                 "Put this on my Work desk in \(.applicationName)"              // xcstrings
             ],
-            shortTitle: "Add Files to Work",                  // xcstrings
+            shortTitle: LocalizedStringResource("Add Files to Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),                  // xcstrings
             systemImageName: "doc.badge.plus"
         )
 
@@ -77,7 +77,7 @@ struct ConduckShortcuts: AppShortcutsProvider {
                 "Record a note to Work in \(.applicationName)",                // xcstrings
                 "Save a voice note to Work in \(.applicationName)"             // xcstrings
             ],
-            shortTitle: "Record a Note to Work",              // xcstrings
+            shortTitle: LocalizedStringResource("Record a Note to Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),              // xcstrings
             systemImageName: "mic.badge.plus"
         )
     }

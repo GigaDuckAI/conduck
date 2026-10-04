@@ -140,7 +140,7 @@ struct AttachmentImageGrid: View {
         .pointerHoverWash(cornerRadius: 10)
         .accessibilityLabel(Text(String(
             format: String(localized: LocalizedStringResource(
-                "attachment.image.accessibility", defaultValue: "Image %lld of %lld")),
+                "attachment.image.accessibility", defaultValue: "Image %lld of %lld", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             index + 1, attachments.count
         )))
     }

@@ -23,7 +23,7 @@ struct WorkDeskFreeProjectSelectionView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                Text(LocalizedStringResource("workdesk.pro.selection.explanation", defaultValue: "Keep up to \(Constants.maxActiveWorkProjects) projects active. The others will be archived, with all their materials and conversations preserved."))
+                Text(LocalizedStringResource("workdesk.pro.selection.explanation", defaultValue: "Keep up to \(Constants.maxActiveWorkProjects) projects active. The others will be archived, with all their materials and conversations preserved.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.callout).foregroundStyle(AppColors.textSecondary)
                     .padding(.horizontal, 20).padding(.top, 16)
                 List(reviewedProjects) { project in
@@ -45,11 +45,11 @@ struct WorkDeskFreeProjectSelectionView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(LocalizedStringResource("workdesk.pro.selection.summary", defaultValue: "\(selectedIDs.count) will stay active. \(reviewedProjects.count - selectedIDs.count) will be archived."))
+                    Text(LocalizedStringResource("workdesk.pro.selection.summary", defaultValue: "\(selectedIDs.count) will stay active. \(reviewedProjects.count - selectedIDs.count) will be archived.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption).foregroundStyle(AppColors.textSecondary)
                     if let error {
                         Text(verbatim: error).font(.caption).foregroundStyle(.red)
-                        Button(LocalizedStringResource("workdesk.pro.selection.reviewAgain", defaultValue: "Review projects again")) {
+                        Button(LocalizedStringResource("workdesk.pro.selection.reviewAgain", defaultValue: "Review projects again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                             Task {
                                 await organization.reload()
                                 reviewedProjects = organization.activeProjects
@@ -59,8 +59,8 @@ struct WorkDeskFreeProjectSelectionView: View {
                         }.inlineLinkButton()
                     }
                     Button(selectedIDs.isEmpty
-                        ? LocalizedStringResource("workdesk.pro.selection.archiveAll", defaultValue: "Archive all projects")
-                        : LocalizedStringResource("workdesk.pro.selection.confirm", defaultValue: "Keep selected projects active")) {
+                        ? LocalizedStringResource("workdesk.pro.selection.archiveAll", defaultValue: "Archive all projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("workdesk.pro.selection.confirm", defaultValue: "Keep selected projects active", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         confirm()
                     }
                     .buttonStyle(.borderedProminent)
@@ -68,10 +68,10 @@ struct WorkDeskFreeProjectSelectionView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }.padding(.horizontal, 20).padding(.bottom, 20)
             }
-            .navigationTitle(Text(LocalizedStringResource("workdesk.pro.chooseProjects", defaultValue: "Choose projects")))
+            .navigationTitle(Text(LocalizedStringResource("workdesk.pro.chooseProjects", defaultValue: "Choose projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) { dismiss() }
+                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { dismiss() }
                         .disabled(isSaving)
                 }
             }

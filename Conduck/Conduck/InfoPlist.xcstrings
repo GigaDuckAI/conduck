@@ -1,0 +1,151 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "NSCameraUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck uses the camera to attach a photo to your message."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck 使用相机拍摄照片并附加到消息中。"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck usa la cámara para adjuntar una foto a tu mensaje."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduckはカメラを使い、撮影した写真をメッセージに添付します。"
+          }
+        }
+      }
+    },
+    "NSFaceIDUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck uses Face ID to confirm it's you before revealing a gateway setup code, which grants full access to your gateway."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网关设置代码提供网关的完整访问权限。显示代码前，Conduck 使用面容 ID 验证你的身份。"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck usa Face ID para confirmar tu identidad antes de mostrar un código de configuración que da acceso completo a tu pasarela."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ゲートウェイへの完全なアクセスを許可する設定コードを表示する前に、Face IDで本人確認を行います。"
+          }
+        }
+      }
+    },
+    "NSLocalNetworkUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck connects to the personal AI gateway or file server you run on your local network, when you configure one at a local address."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置本地地址时，Conduck 会连接你在本地网络中运行的个人 AI 网关或文件服务器。"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck conecta con la pasarela de IA personal o el servidor de archivos que ejecutas en tu red local cuando configuras uno con una dirección local."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ローカルアドレスを設定した場合、Conduckはローカルネットワークで運用するパーソナルAIのゲートウェイやファイルサーバーに接続します。"
+          }
+        }
+      }
+    },
+    "NSMicrophoneUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck records audio for voice transcription using the speech provider you have configured, and to send messages to a personal AI assistant you've configured."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck 录制音频，使用你配置的语音服务商进行转写，并向你配置的个人 AI 助手发送消息。"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck graba audio para transcribir voz con el proveedor que has configurado y para enviar mensajes al asistente de IA personal que has configurado."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduckは音声を録音して、設定した音声認識プロバイダーで文字起こしし、設定したパーソナルAIアシスタントにメッセージを送信します。"
+          }
+        }
+      }
+    },
+    "NSSpeechRecognitionUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck uses Apple's on-device speech recognition when you select Apple as your STT provider. Audio never leaves your device."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择 Apple 作为 STT 服务商时，Conduck 使用 Apple 的设备端语音识别。音频不会离开设备。"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conduck usa el reconocimiento de voz de Apple en el dispositivo cuando eliges Apple como proveedor de STT. El audio nunca sale de tu dispositivo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "STTプロバイダーにAppleを選ぶと、ConduckはAppleのデバイス内音声認識を使います。音声がデバイスの外に送られることはありません。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

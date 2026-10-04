@@ -117,13 +117,13 @@ struct MessageActionsMenu: View {
         Menu {
             Button(action: onCopy) {
                 Label(
-                    LocalizedStringResource("bubble.actions.copy", defaultValue: "Copy message"),
+                    LocalizedStringResource("bubble.actions.copy", defaultValue: "Copy message", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "doc.on.doc"
                 )
             }
             Button(action: onSaveToWork) {
                 Label(
-                    LocalizedStringResource("workboard.chatCapture.action", defaultValue: "Save message to Work"),
+                    LocalizedStringResource("workboard.chatCapture.action", defaultValue: "Save message to Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "rectangle.stack.badge.plus"
                 )
             }
@@ -133,7 +133,7 @@ struct MessageActionsMenu: View {
                 Divider()
                 Button(action: onCopyConversation) {
                     Label(
-                        LocalizedStringResource("thread.copyAll.button", defaultValue: "Copy conversation"),
+                        LocalizedStringResource("thread.copyAll.button", defaultValue: "Copy conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "doc.plaintext"
                     )
                 }
@@ -155,10 +155,10 @@ struct MessageActionsMenu: View {
         #endif
         .accessibilityLabel(Text(LocalizedStringResource(
             "bubble.actions.menu", defaultValue: "Message actions"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .help(Text(LocalizedStringResource(
             "bubble.actions.menu", defaultValue: "Message actions"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 }
 

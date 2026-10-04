@@ -43,8 +43,8 @@ struct PhoneWorkbenchFlipButton: View {
 
     private var label: LocalizedStringResource {
         target == .work
-            ? LocalizedStringResource("workbench.phone.openWork", defaultValue: "Open Work")
-            : LocalizedStringResource("workbench.phone.openChats", defaultValue: "Open Chats")
+            ? LocalizedStringResource("workbench.phone.openWork", defaultValue: "Open Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("workbench.phone.openChats", defaultValue: "Open Chats", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     var body: some View {

@@ -75,7 +75,7 @@ struct STTStatusMap: Sendable {
             return .apiFailure(message: String(
                 localized: "stt.error.unknownHTTPStatus",
                 defaultValue: "Unknown error (HTTP \(code))"
-            ))
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
     }
 
@@ -128,7 +128,7 @@ struct STTStatusMap: Sendable {
             return .invalidRequest(message: String(
                 localized: "stt.error.gemini.badRequest",
                 defaultValue: "That request was rejected. Check the model name in Advanced settings."
-            ))
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case 401, 403:
             // Google returns 403 PERMISSION_DENIED for a disabled API or a
             // restricted key, and 401 for a malformed one. Both are
@@ -142,7 +142,7 @@ struct STTStatusMap: Sendable {
             return .invalidRequest(message: String(
                 localized: "stt.error.gemini.modelNotFound",
                 defaultValue: "That model is not available. Check the model name in Advanced settings."
-            ))
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case 413:
             return .audioTooLarge
         case 429:
@@ -153,7 +153,7 @@ struct STTStatusMap: Sendable {
             return .apiFailure(message: String(
                 localized: "stt.error.unknownHTTPStatus",
                 defaultValue: "Unknown error (HTTP \(code))"
-            ))
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
     }
 
@@ -186,7 +186,7 @@ struct STTStatusMap: Sendable {
             return .apiFailure(message: String(
                 localized: "stt.error.unknownHTTPStatus",
                 defaultValue: "Unknown error (HTTP \(code))"
-            ))
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         default:
             return sharedNon429(code)
         }

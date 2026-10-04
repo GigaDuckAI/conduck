@@ -207,9 +207,9 @@ final class CarPlayRecordingService {
             identifier: VoiceState.listening,
             titleVariants: [
                 // xcstrings
-                String(localized: "Listening"),
+                String(localized: "Listening", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 // xcstrings
-                String(localized: "Speak now")
+                String(localized: "Speak now", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             ],
             image: nil,
             repeats: false
@@ -217,28 +217,28 @@ final class CarPlayRecordingService {
         let processing = CPVoiceControlState(
             identifier: VoiceState.processing,
             // xcstrings
-            titleVariants: [String(localized: "Thinking…")],
+            titleVariants: [String(localized: "Thinking…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)],
             image: nil,
             repeats: false
         )
         let speaking = CPVoiceControlState(
             identifier: VoiceState.speaking,
             // xcstrings
-            titleVariants: [String(localized: "Replying")],
+            titleVariants: [String(localized: "Replying", bundle: AppLocalization.bundle, locale: AppLocalization.locale)],
             image: nil,
             repeats: false
         )
         let muted = CPVoiceControlState(
             identifier: VoiceState.muted,
             // xcstrings
-            titleVariants: [String(localized: "Muted")],
+            titleVariants: [String(localized: "Muted", bundle: AppLocalization.bundle, locale: AppLocalization.locale)],
             image: nil,
             repeats: false
         )
         let saving = CPVoiceControlState(
             identifier: VoiceState.saving,
             // xcstrings
-            titleVariants: [String(localized: "carplay.voice.saving.title", defaultValue: "Saving…")],
+            titleVariants: [String(localized: "carplay.voice.saving.title", defaultValue: "Saving…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)],
             image: nil,
             repeats: false
         )
@@ -1179,7 +1179,7 @@ final class CarPlayRecordingService {
             // "the app died" is the wrong thing for a driver to believe about
             // the thing they just started.
             // xcstrings
-            endSession(speak: String(localized: "Talk to you later."))
+            endSession(speak: String(localized: "Talk to you later.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             return
         }
         // One spoken line for all three broken verdicts: a driver can act on
@@ -1190,7 +1190,7 @@ final class CarPlayRecordingService {
             speak: String(
                 localized: "carplay.error.captureBroken.speak",
                 defaultValue: "Couldn't hear the car's microphone. Try again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         )
     }
 
@@ -1446,7 +1446,7 @@ final class CarPlayRecordingService {
 
         guard let url = recordingURL else {
             // xcstrings
-            endSession(speak: String(localized: "Couldn't save — try again."))
+            endSession(speak: String(localized: "Couldn't save — try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             return
         }
 
@@ -1468,7 +1468,7 @@ final class CarPlayRecordingService {
             }
         } catch {
             // xcstrings
-            endSession(speak: String(localized: "Couldn't save — try again."))
+            endSession(speak: String(localized: "Couldn't save — try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             return
         }
 
@@ -1572,7 +1572,7 @@ final class CarPlayRecordingService {
             // xcstrings: hardening
             endRefusalBelowFork(
                 workCapture,
-                chatLine: String(localized: "Custom voice endpoints aren't available in the car. Pick another provider in Conduck on your iPhone.")
+                chatLine: String(localized: "Custom voice endpoints aren't available in the car. Pick another provider in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         }
@@ -1623,7 +1623,7 @@ final class CarPlayRecordingService {
             // xcstrings
             endRefusalBelowFork(
                 workCapture,
-                chatLine: String(localized: "Add your STT key in Conduck on your iPhone.")
+                chatLine: String(localized: "Add your STT key in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         case .unreadable:
@@ -1651,7 +1651,7 @@ final class CarPlayRecordingService {
             // xcstrings
             endRefusalBelowFork(
                 workCapture,
-                chatLine: String(localized: "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again.")
+                chatLine: String(localized: "Couldn't read your STT key. If your iPhone just restarted, unlock it and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         }
@@ -1673,7 +1673,7 @@ final class CarPlayRecordingService {
                 try compression.data.write(to: chatUploadURL, options: .atomic)
             } catch {
                 // xcstrings
-                endSession(speak: String(localized: "Couldn't save — try again."))
+                endSession(speak: String(localized: "Couldn't save — try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                 return
             }
             uploadURL = chatUploadURL
@@ -1850,7 +1850,7 @@ final class CarPlayRecordingService {
         switch outcome {
         case .saved:
             // xcstrings
-            return String(localized: "carplay.work.saved.speak", defaultValue: "Saved to Work.")
+            return String(localized: "carplay.work.saved.speak", defaultValue: "Saved to Work.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .keptOnPhone:
             // Names the DEVICE and the ACTION, because those are the only two
             // things a driver can act on later, and claims nothing about the
@@ -1859,7 +1859,7 @@ final class CarPlayRecordingService {
             return String(
                 localized: "carplay.work.keptOnPhone.speak",
                 defaultValue: "Kept on your iPhone. Open Conduck to add it to Work."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -1879,7 +1879,7 @@ final class CarPlayRecordingService {
             // Nothing is parked and nothing is on the desk, so the honest line
             // is the one that claims neither.
             // xcstrings
-            endSession(speak: String(localized: "Couldn't save — try again."))
+            endSession(speak: String(localized: "Couldn't save — try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             return
         }
         endSession(speak: Self.workNoteAcknowledgement(for: outcome))
@@ -1939,7 +1939,7 @@ final class CarPlayRecordingService {
             // Nothing is preserved and nothing is on the desk, so the honest
             // line is the one that claims neither.
             // xcstrings
-            endSession(speak: String(localized: "Couldn't save — try again."))
+            endSession(speak: String(localized: "Couldn't save — try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             return nil
         }
 
@@ -2173,7 +2173,7 @@ final class CarPlayRecordingService {
         let outcome = CarPlayEmptyTurnPolicy.outcome(after: consecutiveEmptyTurns)
         consecutiveEmptyTurns = CarPlayEmptyTurnPolicy.nextCount(after: consecutiveEmptyTurns)
         // xcstrings
-        let prompt = String(localized: "Didn't catch that — try again.")
+        let prompt = String(localized: "Didn't catch that — try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         switch outcome {
         case .retryListening:
@@ -2306,7 +2306,7 @@ final class CarPlayRecordingService {
                     // per-conversation binding. Starting a new chat is the exit.
                     // xcstrings
                     endSession(
-                        speak: String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.")
+                        speak: String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     )
                     return
                 }
@@ -2316,7 +2316,7 @@ final class CarPlayRecordingService {
                 if snapshot.authScheme.requiresToken, (snapshot.token?.isEmpty ?? true) {
                     // xcstrings
                     endSession(
-                        speak: String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.")
+                        speak: String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     )
                     return
                 }
@@ -2772,28 +2772,28 @@ final class CarPlayRecordingService {
         switch error {
         case .noSpeechDetected:
             // xcstrings
-            phrase = String(localized: "Didn't catch that — try again.")
+            phrase = String(localized: "Didn't catch that — try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioInvalid, .audioTooLarge, .audioProcessingFailed, .audioMissingData:
             // xcstrings
-            phrase = String(localized: "Couldn't save — try again.")
+            phrase = String(localized: "Couldn't save — try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .speechPermissionDenied:
             // xcstrings: watch-stt-fix
-            phrase = String(localized: "Speech Recognition is off. Allow it in iPhone Settings under Privacy and Speech Recognition.")
+            phrase = String(localized: "Speech Recognition is off. Allow it in iPhone Settings under Privacy and Speech Recognition.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttAuthFailed:
             // xcstrings
-            phrase = String(localized: "STT key isn't working. Update it in Conduck on your iPhone.")
+            phrase = String(localized: "STT key isn't working. Update it in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttMissingAPIKey:
             // xcstrings
-            phrase = String(localized: "Add your STT key in Conduck on your iPhone.")
+            phrase = String(localized: "Add your STT key in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .appleSpeechModelNotInstalled:
             // xcstrings: stt-dictation-default
-            phrase = String(localized: "On-device voice isn't ready. Open Conduck on your iPhone to set it up.")
+            phrase = String(localized: "On-device voice isn't ready. Open Conduck on your iPhone to set it up.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttQuotaExceeded:
             // xcstrings
-            phrase = String(localized: "STT quota is exhausted. Top up with your provider.")
+            phrase = String(localized: "STT quota is exhausted. Top up with your provider.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttTooManyRequests:
             // xcstrings
-            phrase = String(localized: "Too many requests — try again in a moment.")
+            phrase = String(localized: "Too many requests — try again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentDefaultNeedsSetup(let name):
             // Driver-safety rule the certificate arms below already state: say
             // which problem it is, then stop. A driver cannot act on a vague
@@ -2802,17 +2802,17 @@ final class CarPlayRecordingService {
             // front of them, rather than at the iPhone.
             if let name {
                 // xcstrings
-                phrase = String(localized: "Your default AI, \(name), isn't available. Choose another from the list.")
+                phrase = String(localized: "Your default AI, \(name), isn't available. Choose another from the list.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             } else {
                 // xcstrings
-                phrase = String(localized: "Conduck doesn't know which AI to use. Choose one from the list.")
+                phrase = String(localized: "Conduck doesn't know which AI to use. Choose one from the list.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
         case .remoteAgentNotConfigured:
             // xcstrings
-            phrase = String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.")
+            phrase = String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentAuthFailed:
             // xcstrings
-            phrase = String(localized: "carplay.error.authFailed.speak", defaultValue: "Your AI refused the key. Update it in Conduck on your iPhone.")
+            phrase = String(localized: "carplay.error.authFailed.speak", defaultValue: "Your AI refused the key. Update it in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentCertMismatch, .sttCustomCertMismatch, .ttsCustomCertMismatch:
             // Driver-safe brevity argues for a SHORT line, not a vague one. The
             // shared compact form names the risk and points at the phone — the
@@ -2844,27 +2844,27 @@ final class CarPlayRecordingService {
             phrase = CertificateTrustCopy.keyUnpinnableRefusalCompact
         case .remoteAgentTimeout, .remoteAgentUnreachable:
             // xcstrings
-            phrase = String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
+            phrase = String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentServerError, .remoteAgentInvalidResponse:
             // xcstrings
-            phrase = String(localized: "carplay.error.serverError.speak", defaultValue: "Your AI had trouble replying. Try again.")
+            phrase = String(localized: "carplay.error.serverError.speak", defaultValue: "Your AI had trouble replying. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttProviderUnreachable, .noInternetConnection, .requestTimeout, .persistentNetworkFailure, .networkError:
             // xcstrings
-            phrase = String(localized: "Couldn't reach the server. Try again.")
+            phrase = String(localized: "Couldn't reach the server. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttServerError:
             // xcstrings
-            phrase = String(localized: "STT service is having trouble. Try again.")
+            phrase = String(localized: "STT service is having trouble. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttCustomEndpointNotConfigured:
             // Defense in depth — the upload flow already pre-empts custom-active
             // before transcribe; this covers any other path that throws it.
             // xcstrings: hardening
-            phrase = String(localized: "Custom voice endpoints aren't available in the car. Pick another provider in Conduck on your iPhone.")
+            phrase = String(localized: "Custom voice endpoints aren't available in the car. Pick another provider in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttDecodingFailure:
             // Terminal: the provider answered in a shape Conduck can't parse, and
             // it will answer the same way on the next ask. The only lever the
             // driver has is a different provider, which lives on the phone.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "Your speech provider sent an unexpected response. Pick another provider in Conduck on your iPhone.")
+            phrase = String(localized: "Your speech provider sent an unexpected response. Pick another provider in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // ── Gateway verdicts with no lever at the wheel ─────────────────────
         // Each arm below exists for the SAME reason the certificate arms above
@@ -2889,13 +2889,13 @@ final class CarPlayRecordingService {
         // phone, and the line says so instead of implying a fix at the wheel.
         case .remoteAgentOutOfCredits:
             // xcstrings: carplay-terminal
-            phrase = String(localized: "Your AI provider is out of credits. Add credits with your provider.")
+            phrase = String(localized: "Your AI provider is out of credits. Add credits with your provider.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentRateLimited:
             // Names no remedy at all, deliberately: the fix is TIME, and every
             // phrasing of "wait, then ask again" is a retry invitation wearing a
             // delay. Saying why it happened is the honest stopping point.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "Your AI provider is rate-limiting you. Free models often have a daily limit.")
+            phrase = String(localized: "Your AI provider is rate-limiting you. Free models often have a daily limit.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentModelUnavailable:
             // Branches on the MODEL POLICY, never on the lane. Where Conduck
             // hides the model field (OpenClaw / Hermes — self-hosted AND
@@ -2907,9 +2907,9 @@ final class CarPlayRecordingService {
             // customs are `.optional` and take the arm below.
             // xcstrings: carplay-terminal
             if context.userCanChooseModel {
-                phrase = String(localized: "That AI model isn't available. Pick another in Conduck on your iPhone.")
+                phrase = String(localized: "That AI model isn't available. Pick another in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             } else {
-                phrase = String(localized: "carplay.error.modelUnavailable.speak.serverChosen", defaultValue: "The model your server chose isn't available.")
+                phrase = String(localized: "carplay.error.modelUnavailable.speak.serverChosen", defaultValue: "The model your server chose isn't available.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
         case .remoteAgentModelRequired:
             // Same inversion, same dispatch. Reached from
@@ -2919,9 +2919,9 @@ final class CarPlayRecordingService {
             // model-hidden lane really does hear this one.
             // xcstrings: carplay-terminal
             if context.userCanChooseModel {
-                phrase = String(localized: "carplay.error.modelRequired.speak", defaultValue: "Your AI needs a model name. Set one in Conduck on your iPhone.")
+                phrase = String(localized: "carplay.error.modelRequired.speak", defaultValue: "Your AI needs a model name. Set one in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             } else {
-                phrase = String(localized: "carplay.error.modelRequired.speak.serverChosen", defaultValue: "Your server needs a default model.")
+                phrase = String(localized: "carplay.error.modelRequired.speak.serverChosen", defaultValue: "Your server needs a default model.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
         case .remoteAgentContextTooLong:
             // Deliberately UNBRANCHED, unlike 55 and 60 above: "the model" here
@@ -2929,26 +2929,26 @@ final class CarPlayRecordingService {
             // voice chat — is one tap away on every lane (ending the session
             // lands on the picker whose first row is "New voice chat").
             // xcstrings: carplay-terminal
-            phrase = String(localized: "This chat got too long for the model. Start a new voice chat.")
+            phrase = String(localized: "This chat got too long for the model. Start a new voice chat.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentImageTooLarge:
             // CarPlay attaches nothing itself — the offending image rides in the
             // client-owned history this session replays, so a new thread is the
             // whole fix and it is one tap away on the screen the driver is about
             // to land on.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "carplay.error.imageTooLarge.speak", defaultValue: "A photo in this chat was too large for your AI. Start a new voice chat.")
+            phrase = String(localized: "carplay.error.imageTooLarge.speak", defaultValue: "A photo in this chat was too large for your AI. Start a new voice chat.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentVisionUnsupported:
             // Same history shape as the arm above. "Couldn't use a photo" rather
             // than "can't read images": the client cannot tell the adapter from
             // the engine, so it never attributes the decline.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "carplay.error.visionUnsupported.speak", defaultValue: "Your AI couldn't use a photo in this chat. Start a new voice chat.")
+            phrase = String(localized: "carplay.error.visionUnsupported.speak", defaultValue: "Your AI couldn't use a photo in this chat. Start a new voice chat.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferNotConfigured:
             // Thrown by this file's own pre-enqueue lane revalidation when the
             // ready file lane was removed or repointed mid-turn. Terminal for
             // this session; the lane is rebuilt on the phone.
             // xcstrings: carplay-terminal
-            phrase = String(localized: "carplay.error.fileTransferNotConfigured.speak", defaultValue: "File transfer isn't set up. Check it in Conduck on your iPhone.")
+            phrase = String(localized: "carplay.error.fileTransferNotConfigured.speak", defaultValue: "File transfer isn't set up. Check it in Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         default:
             // The catch-all stays, and it asks the taxonomy instead of assuming.
             //
@@ -2970,10 +2970,10 @@ final class CarPlayRecordingService {
             // safety net under them.
             if error.isRetryable {
                 // xcstrings
-                phrase = String(localized: "Something went wrong. Try again.")
+                phrase = String(localized: "Something went wrong. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             } else {
                 // xcstrings: carplay-terminal
-                phrase = String(localized: "Something went wrong. Check Conduck on your iPhone.")
+                phrase = String(localized: "Something went wrong. Check Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
         }
         endSession(speak: phrase)

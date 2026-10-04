@@ -304,21 +304,21 @@ extension SettingsViewModel {
     /// two ways forward, and never imply the key can be recovered.
     static var oauthMissingKeyMessage: String {
         String(localized: "settings.remoteAgent.openRouter.signIn.missingKey",
-               defaultValue: "That OpenRouter sign-in is no longer available. Sign in again, or paste an API key.")
+               defaultValue: "That OpenRouter sign-in is no longer available. Sign in again, or paste an API key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// This device cannot start a SECURE sign-in — no callback scheme, or no
     /// cryptographic randomness. Terminal for the feature, not for the screen.
     static var openRouterSignInUnavailableMessage: String {
         String(localized: "settings.remoteAgent.openRouter.signIn.unavailable",
-               defaultValue: "Conduck couldn't start a secure sign-in on this device. Paste an API key instead.")
+               defaultValue: "Conduck couldn't start a secure sign-in on this device. Paste an API key instead.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The callback did not match the transaction that started it — a stale
     /// callback, a malformed one, or an auth session that ended with nothing.
     static var openRouterSignInInvalidCallbackMessage: String {
         String(localized: "settings.remoteAgent.openRouter.signIn.invalidCallback",
-               defaultValue: "The sign-in didn't come back the way Conduck expected. Try again, or paste an API key.")
+               defaultValue: "The sign-in didn't come back the way Conduck expected. Try again, or paste an API key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Error → sentence. Every arm ends by naming the paste field, because that
@@ -340,22 +340,22 @@ extension SettingsViewModel {
             // OpenRouter would not complete the sign-in. The provider's own error
             // token is deliberately not echoed.
             return String(localized: "settings.remoteAgent.openRouter.signIn.rejected",
-                          defaultValue: "OpenRouter didn't accept the sign-in. Try again, or paste an API key.")
+                          defaultValue: "OpenRouter didn't accept the sign-in. Try again, or paste an API key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .rateLimited:
             return String(localized: "settings.remoteAgent.openRouter.signIn.rateLimited",
-                          defaultValue: "OpenRouter is rate-limiting sign-ins. Wait a moment, or paste an API key.")
+                          defaultValue: "OpenRouter is rate-limiting sign-ins. Wait a moment, or paste an API key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .network:
             return String(localized: "settings.remoteAgent.openRouter.signIn.network",
-                          defaultValue: "Couldn't reach OpenRouter. Check your connection, or paste an API key.")
+                          defaultValue: "Couldn't reach OpenRouter. Check your connection, or paste an API key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .outcomeUnknown:
             return String(localized: "settings.remoteAgent.openRouter.signIn.outcomeUnknown",
-                          defaultValue: "OpenRouter didn't answer in time. If a new key appeared in your OpenRouter account, you can remove it there. Try again, or paste an API key.")
+                          defaultValue: "OpenRouter didn't answer in time. If a new key appeared in your OpenRouter account, you can remove it there. Try again, or paste an API key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .badRequest, .methodNotAllowed, .malformedResponse, .serverError, .unexpectedStatus:
             // One sentence for every "the answer was not what the exchange is
             // written against", including 5xx. Splitting it would ask the user to
             // act on a distinction they cannot act on — the remedy is identical.
             return String(localized: "settings.remoteAgent.openRouter.signIn.unexpected",
-                          defaultValue: "OpenRouter answered in a way Conduck didn't expect. Try again, or paste an API key.")
+                          defaultValue: "OpenRouter answered in a way Conduck didn't expect. Try again, or paste an API key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .cancelled:
             // Unreachable from `completeOpenRouterSignIn`, which returns
             // `.cancelled` before it reaches this mapping. Present so the switch

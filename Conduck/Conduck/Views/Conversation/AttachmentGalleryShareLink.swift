@@ -96,7 +96,7 @@ struct AttachmentGalleryShareItem: Transferable, Sendable {
             ? String(localized: LocalizedStringResource(
                 "attachment.gallery.share.filename",
                 defaultValue: "Image"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             : String(safe.prefix(120))
 
         let currentExtension = (base as NSString).pathExtension
@@ -131,7 +131,7 @@ struct AttachmentGalleryShareLink: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "attachment.gallery.share",
             defaultValue: "Share"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 }
 

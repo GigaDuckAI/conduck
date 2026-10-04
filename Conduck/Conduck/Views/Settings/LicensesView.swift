@@ -48,13 +48,13 @@ enum LegalDocument: String, CaseIterable, Identifiable {
         switch self {
         case .license:
             return LocalizedStringResource("settings.about.licenses.conduck.title",
-                                           defaultValue: "Conduck License")
+                                           defaultValue: "Conduck License", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .notice:
             return LocalizedStringResource("settings.about.licenses.notice.title",
-                                           defaultValue: "Notice")
+                                           defaultValue: "Notice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .thirdParty:
             return LocalizedStringResource("settings.about.licenses.thirdparty.title",
-                                           defaultValue: "Third-Party Notices")
+                                           defaultValue: "Third-Party Notices", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -62,13 +62,13 @@ enum LegalDocument: String, CaseIterable, Identifiable {
         switch self {
         case .license:
             return LocalizedStringResource("settings.about.licenses.conduck.subtitle",
-                                           defaultValue: "Apache License 2.0")
+                                           defaultValue: "Apache License 2.0", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .notice:
             return LocalizedStringResource("settings.about.licenses.notice.subtitle",
-                                           defaultValue: "Attribution notice")
+                                           defaultValue: "Attribution notice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .thirdParty:
             return LocalizedStringResource("settings.about.licenses.thirdparty.subtitle",
-                                           defaultValue: "Bundled open-source components")
+                                           defaultValue: "Bundled open-source components", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }
@@ -124,12 +124,12 @@ struct LicensesView: View {
             } footer: {
                 Text(LocalizedStringResource(
                     "settings.about.licenses.footer",
-                    defaultValue: "Conduck's own source and placeholder artwork are licensed under the Apache License 2.0. Bundled third-party components keep their own licenses, reproduced here."))
+                    defaultValue: "Conduck's own source and placeholder artwork are licensed under the Apache License 2.0. Bundled third-party components keep their own licenses, reproduced here.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .navigationTitle(Text(LocalizedStringResource(
-            "settings.about.licenses.title", defaultValue: "Open Source Licenses")))
+            "settings.about.licenses.title", defaultValue: "Open Source Licenses", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -159,7 +159,7 @@ struct LegalDocumentDetailView: View {
                 } else if loadFailed {
                     Text(LocalizedStringResource(
                         "settings.about.licenses.loadError",
-                        defaultValue: "This document could not be loaded."))
+                        defaultValue: "This document could not be loaded.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .foregroundStyle(Color.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {

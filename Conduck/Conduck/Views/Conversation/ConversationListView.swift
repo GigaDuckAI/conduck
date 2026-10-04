@@ -257,13 +257,13 @@ struct ConversationListView: View {
                             Image("conduck-app-mark")
                                 .resizable().interpolation(.high)
                                 .frame(width: 28, height: 28)
-                            Text(LocalizedStringResource("menu.settings.short", defaultValue: "Settings"))
+                            Text(LocalizedStringResource("menu.settings.short", defaultValue: "Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppColors.textPrimary)
                         }
                     }
                     .accessibilityIdentifier("toolbar.settings")
-                    .accessibilityLabel(Text(LocalizedStringResource("menu.settings.short", defaultValue: "Settings")))
+                    .accessibilityLabel(Text(LocalizedStringResource("menu.settings.short", defaultValue: "Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 }
             }
             #endif
@@ -273,7 +273,7 @@ struct ConversationListView: View {
                         Button {
                             onNewConversation()
                         } label: {
-                            Label(String(localized: "New conversation"), systemImage: "square.and.pencil")  // xcstrings: chat-ui
+                            Label(String(localized: "New conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale), systemImage: "square.and.pencil")  // xcstrings: chat-ui
                         }
                         .accessibilityIdentifier("toolbar.newConversation")  // stable QA target (non-localized)
                     }
@@ -287,7 +287,7 @@ struct ConversationListView: View {
                                 Button(role: .destructive) {
                                     showDeleteAllConfirmation = true
                                 } label: {
-                                    Label(String(localized: "Delete All"), systemImage: "trash")
+                                    Label(String(localized: "Delete All", bundle: AppLocalization.bundle, locale: AppLocalization.locale), systemImage: "trash")
                                 }
                                 .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
                             } label: {
@@ -297,7 +297,7 @@ struct ConversationListView: View {
                             Button(role: .destructive) {
                                 showDeleteAllConfirmation = true
                             } label: {
-                                Label(String(localized: "Delete All"), systemImage: "trash")
+                                Label(String(localized: "Delete All", bundle: AppLocalization.bundle, locale: AppLocalization.locale), systemImage: "trash")
                             }
                             .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
                         }
@@ -526,7 +526,7 @@ struct ConversationListView: View {
                                     }
                                 }
                             } label: {
-                                Label(String(localized: "Delete"), systemImage: "trash")
+                                Label(String(localized: "Delete", bundle: AppLocalization.bundle, locale: AppLocalization.locale), systemImage: "trash")
                             }
                             .accessibilityIdentifier("context.deleteConversation")  // stable QA target (non-localized)
                         }
@@ -810,7 +810,7 @@ struct ConversationListView: View {
             Text(LocalizedStringResource(
                 "conversations.empty.micHint",
                 defaultValue: "Tap the mic on the home screen to start a conversation with your AI."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -919,7 +919,7 @@ struct SidebarSearchField: View {
 
     init(
         text: Binding<String>,
-        prompt: LocalizedStringResource = LocalizedStringResource("Search conversations"),
+        prompt: LocalizedStringResource = LocalizedStringResource("Search conversations", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         accessibilityLabel: LocalizedStringResource? = nil,
         isFocused: Binding<Bool> = .constant(false),
         onSubmit: @escaping () -> Void = {},

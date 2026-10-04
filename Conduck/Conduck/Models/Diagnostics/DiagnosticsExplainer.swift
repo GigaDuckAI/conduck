@@ -48,11 +48,11 @@ enum DiagnosticsExplainer {
         let genericCause = String(
             localized: "diagnostics.cause.generic",
             defaultValue: "The last request didn't go through."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         let genericFix = String(
             localized: "diagnostics.fix.generic",
             defaultValue: "Try again in a moment."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         let cause: String
         if opaqueCodes.contains(code) {
             cause = genericCause

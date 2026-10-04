@@ -154,7 +154,7 @@ final class ConversationListViewModel {
                 changeGeneration += 1
             }
         } catch {
-            loadError = String(localized: "Couldn't load your conversations. Try again.")
+            loadError = String(localized: "Couldn't load your conversations. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         isLoading = false
     }
@@ -299,7 +299,7 @@ final class ConversationListViewModel {
             changeGeneration += 1
             return true
         } catch {
-            loadError = String(localized: "Couldn't clear your conversations. Try again.")
+            loadError = String(localized: "Couldn't clear your conversations. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return false
         }
     }

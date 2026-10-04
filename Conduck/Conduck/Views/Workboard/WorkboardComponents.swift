@@ -242,13 +242,13 @@ extension WorkboardLargeImportConfirming {
     var largeImportMessage: String {
         let counts = largeItemByteCounts
         let totalBytes = counts.reduce(Int64(0)) { $0 + max(0, $1) }
-        let formattedSize = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
+        let formattedSize = AppLocalization.byteCount(totalBytes, style: .file)
         if counts.count == 1 {
             return String.localizedStringWithFormat(
                 String(localized: LocalizedStringResource(
                     "workboard.material.large.confirm.message.one",
                     defaultValue: "One large file (%@) stays on this device instead of syncing to your other devices, and may take a moment to copy."
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 formattedSize
             )
         }
@@ -256,7 +256,7 @@ extension WorkboardLargeImportConfirming {
             String(localized: LocalizedStringResource(
                 "workboard.material.large.confirm.message",
                 defaultValue: "%1$lld large files (%2$@) stay on this device instead of syncing to your other devices, and may take a moment to copy."
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             Int64(counts.count),
             formattedSize
         )
@@ -277,12 +277,12 @@ extension View {
                 title: Text(LocalizedStringResource(
                     "workboard.material.large.confirm.title",
                     defaultValue: "Add large files?"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 message: Text(verbatim: confirmation.largeImportMessage),
                 primaryButton: .default(Text(LocalizedStringResource(
                     "workboard.material.large.confirm.add",
                     defaultValue: "Add to Work"
-                ))) {
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))) {
                     onConfirm(confirmation)
                 },
                 secondaryButton: .cancel {

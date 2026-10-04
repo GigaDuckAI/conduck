@@ -1100,7 +1100,7 @@ final class MenuBarCoordinator {
 
     /// Cached display name of the persisted DEFAULT gateway (the mint target
     /// for automatic/new-chat destinations). Refreshed with the snapshot.
-    private(set) var quickDefaultGatewayName: String = String(localized: "Personal AI")  // xcstrings: chat-ui
+    private(set) var quickDefaultGatewayName: String = String(localized: "Personal AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
 
     /// The most recent AUTOMATIC resolution, kept even while an explicit
     /// override occupies `quickDestination` — `selectQuickDestination(.automatic)`
@@ -2466,7 +2466,7 @@ final class MenuBarCoordinator {
                 message: String(localized: LocalizedStringResource(
                     "workboard.menuBar.voice.cardMissing",
                     defaultValue: "That note is no longer on your desk."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             )
             return
         }
@@ -2482,7 +2482,7 @@ final class MenuBarCoordinator {
             message: String(localized: LocalizedStringResource(
                 "workboard.menuBar.voice.saved",
                 defaultValue: "Added to Work. The words came from your speech provider."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         )
     }
 
@@ -2493,7 +2493,7 @@ final class MenuBarCoordinator {
     /// the same lease refusal — one microphone, one explanation, whichever lane
     /// asked for it.
     private static var microphoneBusyMessage: String {
-        String(localized: "Microphone is in use by another recording.")
+        String(localized: "Microphone is in use by another recording.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// A ⌃⌘W refused BEFORE its overlay because another recorder — the main
@@ -2692,14 +2692,14 @@ final class MenuBarCoordinator {
                         message: String(localized: LocalizedStringResource(
                             "workboard.menuBar.saved",
                             defaultValue: "Added to Work. Nothing was sent."
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     )
                     : MenuBarWorkCaptureFeedback(
                         kind: .queued,
                         message: String(localized: LocalizedStringResource(
                             "workboard.menuBar.savedQueued",
                             defaultValue: "On its way to Work. Nothing was sent."
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     )
             } catch {
                 // Nothing was filed, so the composition gets its picture back —
@@ -3238,7 +3238,7 @@ final class MenuBarCoordinator {
         String(localized: LocalizedStringResource(
             "popover.error.conversationCreateFailed",
             defaultValue: "Couldn't start a conversation for that. Your words are kept — press Retry to send them."
-        ))  // xcstrings: hardening
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings: hardening
     }
 
     /// Explicitly-picked destination thread was deleted before the send landed.
@@ -3248,7 +3248,7 @@ final class MenuBarCoordinator {
         String(localized: LocalizedStringResource(
             "popover.error.destinationDeleted",
             defaultValue: "That conversation was deleted. Your words are kept — press Retry to send them to a new chat."
-        ))  // xcstrings: session-continuation
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings: session-continuation
     }
 
     /// Target thread already has a turn in flight (one in-flight turn per VM).
@@ -3257,7 +3257,7 @@ final class MenuBarCoordinator {
         String(localized: LocalizedStringResource(
             "popover.error.destinationBusy.v2",
             defaultValue: "Your AI is still answering. Your words are kept — press Retry when it finishes."
-        ))  // xcstrings: session-continuation
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings: session-continuation
     }
 
     /// The gateway this capture would have started on cannot send. Names the
@@ -3267,7 +3267,7 @@ final class MenuBarCoordinator {
         String(localized: LocalizedStringResource(
             "popover.error.destinationUnavailable",
             defaultValue: "This Mac can't reach its default AI. Your words are kept — choose a default in Settings, then press Retry."
-        ))  // xcstrings: gateway-gate
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings: gateway-gate
     }
 
     /// Replay a turn stranded by a hand-off failure (popover error-footer Retry).

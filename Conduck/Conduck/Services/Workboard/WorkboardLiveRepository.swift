@@ -389,17 +389,17 @@ final class WorkboardLiveRepository {
         }
         switch presentationKind(record) {
         case .image:
-            return String(localized: "workboard.material.image", defaultValue: "Image")
+            return String(localized: "workboard.material.image", defaultValue: "Image", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .file:
-            return String(localized: "workboard.material.file", defaultValue: "File")
+            return String(localized: "workboard.material.file", defaultValue: "File", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .link:
-            return String(localized: "workboard.material.link", defaultValue: "Link")
+            return String(localized: "workboard.material.link", defaultValue: "Link", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .note:
-            return String(localized: "workboard.material.note", defaultValue: "Note")
+            return String(localized: "workboard.material.note", defaultValue: "Note", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audio:
-            return String(localized: "workboard.material.audio", defaultValue: "Voice note")
+            return String(localized: "workboard.material.audio", defaultValue: "Voice note", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .transcript:
-            return String(localized: "workboard.material.transcript", defaultValue: "Spoken note")
+            return String(localized: "workboard.material.transcript", defaultValue: "Spoken note", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -417,12 +417,12 @@ final class WorkboardLiveRepository {
             parts.append(String(
                 localized: "workboard.material.localOnly",
                 defaultValue: "Available on this device"
-            ))
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .unavailableOnThisDevice:
             parts.append(String(
                 localized: "workboard.material.unavailableHere",
                 defaultValue: "Reattach on this device to open"
-            ))
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .syncedPending:
             parts.append(String(localized: ContentSyncPresentationPolicy.missingFileSummary(
                 enabled: ContentSyncPresentationSnapshot.shared.isEnabled
@@ -432,7 +432,7 @@ final class WorkboardLiveRepository {
         }
 
         if parts.isEmpty, record.byteSize > 0 {
-            parts.append(ByteCountFormatter.string(fromByteCount: record.byteSize, countStyle: .file))
+            parts.append(AppLocalization.byteCount(record.byteSize, style: .file))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
@@ -746,27 +746,27 @@ enum WorkboardLiveRepositoryError: LocalizedError, Equatable {
             return String(
                 localized: "workboard.error.itemMissing",
                 defaultValue: "This card is no longer available."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .staleDraft:
             return String(
                 localized: "workboard.error.staleDraft",
                 defaultValue: "This card changed on another device. Reopen it to keep the latest version."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .missingPayload:
             return String(
                 localized: "workboard.error.missingPayload",
                 defaultValue: "That file could not be read. Choose it again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .invalidLink:
             return String(
                 localized: "workboard.error.invalidLink",
                 defaultValue: "Add a complete http or https link."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .emptyNote:
             return String(
                 localized: "workboard.error.emptyNote",
                 defaultValue: "Write something before adding the note."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }

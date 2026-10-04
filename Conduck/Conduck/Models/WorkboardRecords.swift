@@ -616,11 +616,11 @@ extension WorkboardStoreError: LocalizedError {
         case .contentTooLong:
             // Grouped by the reader's own locale ("16,000"), not by `%lld`,
             // which would print a bare 16000 the person has to count.
-            let limit = WorkItemContentLimits.maximumFieldCharacters.formatted(.number)
+            let limit = WorkItemContentLimits.maximumFieldCharacters.formatted(.number.locale(AppLocalization.locale))
             return String(
                 localized: "workboard.error.contentTooLong",
                 defaultValue: "That text is longer than \(limit) characters. Shorten it, then try again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .itemNotFound,
              .staleRevision,
              .materialNotFound,

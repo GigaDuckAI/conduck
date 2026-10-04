@@ -37,7 +37,7 @@ struct CertificateTrustSheet: View {
                 Text(LocalizedStringResource(
                     "settings.certTrust.title",
                     defaultValue: "Server certificate"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.headline)
                     .foregroundStyle(AppColors.textPrimary)
 
@@ -52,7 +52,7 @@ struct CertificateTrustSheet: View {
                         Text(LocalizedStringResource(
                             "settings.certTrust.useAutomatic",
                             defaultValue: "Use Automatic Trust"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .foregroundStyle(AppColors.textPrimary)
                     }
                     .buttonStyle(.bordered)
@@ -66,7 +66,7 @@ struct CertificateTrustSheet: View {
                         Text(LocalizedStringResource(
                             "settings.certTrust.done",
                             defaultValue: "Done"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .fontWeight(.semibold)
                             .foregroundStyle(AppColors.textPrimary)
                     }
@@ -95,7 +95,7 @@ struct CertificateTrustSheet: View {
             Text(LocalizedStringResource(
                 "settings.certTrust.status.pinned",
                 defaultValue: "Pinned on this device — Conduck only accepts the server holding this exact certificate, so an impostor at the same address is turned away."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -103,7 +103,7 @@ struct CertificateTrustSheet: View {
             Text(LocalizedStringResource(
                 "settings.certTrust.status.automatic",
                 defaultValue: "Automatic — this server proves who it is with a certificate this device already trusts. Most servers work this way, and there's nothing to set up."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -117,11 +117,11 @@ struct CertificateTrustSheet: View {
             Text(LocalizedStringResource(
                 "settings.certTrust.manual.label",
                 defaultValue: "Certificate fingerprint (SPKI SHA-256)"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppColors.textSecondary)
             TextField(
-                String(localized: "settings.certTrust.manual.prompt", defaultValue: "64 hex characters"),
+                String(localized: "settings.certTrust.manual.prompt", defaultValue: "64 hex characters", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 text: $fingerprint
             )
                 .font(.system(.callout, design: .monospaced))
@@ -138,7 +138,7 @@ struct CertificateTrustSheet: View {
             Text(LocalizedStringResource(
                 "settings.certTrust.manual.helper.v2",
                 defaultValue: "Optional, and only ever a tightening: Conduck already refuses a certificate this device doesn't trust, and a fingerprint narrows that to one exact certificate. Paste it from the server you run."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

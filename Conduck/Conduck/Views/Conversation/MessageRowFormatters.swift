@@ -33,7 +33,9 @@ import Foundation
 enum MessageRowFormatters {
     /// Locale-aware relative date ("2 min ago", "yesterday").
     static func relativeDate(from date: Date) -> String {
-        RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = AppLocalization.locale
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     /// Sidebar-row timestamp with a calendar-anchored shape: **Today** → the
@@ -50,7 +52,7 @@ enum MessageRowFormatters {
         }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
            calendar.isDate(date, inSameDayAs: yesterday) {
-            return String(localized: "Yesterday")  // xcstrings: chat-ui
+            return String(localized: "Yesterday", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
         let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
         return sameYear
@@ -61,21 +63,20 @@ enum MessageRowFormatters {
     /// Cached formatters for `conversationListDate` (DateFormatter creation is
     /// expensive; these are reused across every row). Templates are
     /// locale-resolved (12h/24h, month-name order) by `setLocalizedDateFormatFromTemplate`.
-    private static let listTimeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.setLocalizedDateFormatFromTemplate("jmm")
-        return f
-    }()
-    private static let listDayMonthFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.setLocalizedDateFormatFromTemplate("MMMd")
-        return f
-    }()
-    private static let listDayMonthYearFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.setLocalizedDateFormatFromTemplate("MMMdyyyy")
-        return f
-    }()
+    private static var listFormatters: [String: DateFormatter] = [:]
+    private static var listTimeFormatter: DateFormatter { listFormatter(template: "jmm") }
+    private static var listDayMonthFormatter: DateFormatter { listFormatter(template: "MMMd") }
+    private static var listDayMonthYearFormatter: DateFormatter { listFormatter(template: "MMMdyyyy") }
+
+    private static func listFormatter(template: String) -> DateFormatter {
+        let key = AppLocalization.language.rawValue + "." + template
+        if let cached = listFormatters[key] { return cached }
+        let formatter = DateFormatter()
+        formatter.locale = AppLocalization.locale
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        listFormatters[key] = formatter
+        return formatter
+    }
 
     /// Characters kept in a conversation headline before an ellipsis. The
     /// headline renders on one line, so this is a cost ceiling on untrusted text
@@ -117,7 +118,7 @@ enum MessageRowFormatters {
                 return line
             }
         }
-        return String(localized: "New conversation")
+        return String(localized: "New conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// First non-empty line of the text, projected to one safe display line and
@@ -164,7 +165,7 @@ enum MessageRowFormatters {
         )
         guard projected.count > maxLength else { return projected }
         let head = ReplySanitizer.displayLine(projected, maxLength: maxLength, fallback: "")
-        return head + String(localized: "…")
+        return head + String(localized: "…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Characters the truncation probe asks for BEYOND the cap. TWO, not one: the
@@ -210,10 +211,10 @@ enum MessageRowFormatters {
         guard let projectName = projectName.map(projectedLine), !projectName.isEmpty else { return date }
         if projectIsArchived {
             return String(localized: "conversations.row.project.archived",
-                          defaultValue: "\(projectName) · \(archivedWord)")  // xcstrings: chat-ui
+                          defaultValue: "\(projectName) · \(archivedWord)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
         return String(localized: "conversations.row.project.date",
-                      defaultValue: "\(projectName) · \(date)")  // xcstrings: chat-ui
+                      defaultValue: "\(projectName) · \(date)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 
     /// Whether the visible date slot carries the project name in this state —
@@ -228,7 +229,7 @@ enum MessageRowFormatters {
 
     /// The same word the Work sidebar draws for a paused project.
     static var archivedWord: String {
-        String(localized: "workdesk.projects.archived", defaultValue: "Archived")
+        String(localized: "workdesk.projects.archived", defaultValue: "Archived", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// What VoiceOver says about a row's project membership. Spoken whenever
@@ -276,7 +277,7 @@ enum MessageRowFormatters {
         guard !line.isEmpty else { return nil }
         guard role == .user else { return line }
         return String(localized: "conversation.row.youSaid",
-                      defaultValue: "You: \(line)")  // xcstrings: chat-ui
+                      defaultValue: "You: \(line)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 
     /// One composed VoiceOver label for a whole conversation row.
@@ -340,7 +341,7 @@ enum MessageRowFormatters {
                 parts.append(projected.isEmpty
                     ? inAProject
                     : String(localized: "conversations.row.a11y.inProject",
-                             defaultValue: "In project \(projected)"))  // xcstrings: chat-ui
+                             defaultValue: "In project \(projected)", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings: chat-ui
                 if isArchived { parts.append(archivedWord) }
             }
         }
@@ -387,7 +388,7 @@ enum MessageRowFormatters {
     }
 
     private static var inAProject: String {
-        String(localized: "conversations.row.a11y.inUnsyncedProject", defaultValue: "In a project")  // xcstrings: chat-ui
+        String(localized: "conversations.row.a11y.inUnsyncedProject", defaultValue: "In a project", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 
     /// Trailing ellipsis + full stop, trimmed off a status sentence before it is
@@ -411,19 +412,19 @@ enum MessageRowFormatters {
         case .working:
             return state.hasUnseenReply
                 ? String(localized: "activity.a11y.workingUnseen",
-                         defaultValue: "Working, new reply")  // xcstrings: chat-ui
+                         defaultValue: "Working, new reply", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
                 : String(localized: "activity.a11y.working",
-                         defaultValue: "Working")  // xcstrings: chat-ui
+                         defaultValue: "Working", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         case .failed:
             return state.hasUnseenReply
                 ? String(localized: "activity.a11y.notSentUnseen",
-                         defaultValue: "Not sent, new reply")  // xcstrings: chat-ui
+                         defaultValue: "Not sent, new reply", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
                 : ConversationActivityCopy.notSent
         }
     }
 
     private static var newReplyWord: String {
-        String(localized: "activity.a11y.newReply", defaultValue: "New reply")  // xcstrings: chat-ui
+        String(localized: "activity.a11y.newReply", defaultValue: "New reply", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 
     /// "Sent at 10:14" for today, "Sent Yesterday" / "Sent Apr 12" otherwise —
@@ -433,10 +434,10 @@ enum MessageRowFormatters {
         let stamp = conversationListDate(from: date, now: now)
         if Calendar.current.isDate(date, inSameDayAs: now) {
             return String(localized: "activity.a11y.sentAtTime",
-                          defaultValue: "Sent at \(stamp)")  // xcstrings: chat-ui
+                          defaultValue: "Sent at \(stamp)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
         return String(localized: "activity.a11y.sentOnDay",
-                      defaultValue: "Sent \(stamp)")  // xcstrings: chat-ui
+                      defaultValue: "Sent \(stamp)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 
     static func icon(forDevice device: String) -> String {
@@ -452,11 +453,11 @@ enum MessageRowFormatters {
 
     static func label(forDevice device: String) -> String {
         switch device {
-        case "iphone": return String(localized: "iPhone")
-        case "ipad": return String(localized: "iPad")
-        case "mac": return String(localized: "Mac")
-        case "watch": return String(localized: "Watch")
-        case "carplay": return String(localized: "CarPlay")
+        case "iphone": return String(localized: "iPhone", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        case "ipad": return String(localized: "iPad", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        case "mac": return String(localized: "Mac", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        case "watch": return String(localized: "Watch", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        case "carplay": return String(localized: "CarPlay", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         default: return device
         }
     }
@@ -619,21 +620,21 @@ enum ThinkingIndicator {
     static func label(phase: ThinkingPhase, backendName: String) -> String {
         switch phase {
         case .transcribing:
-            return String(localized: "Transcribing…")  // xcstrings: chat-ui
+            return String(localized: "Transcribing…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         case .sending:
-            return String(localized: "Sending…")  // xcstrings: chat-ui
+            return String(localized: "Sending…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         case .waitingForNetwork:
             // Explicit key, not a bare source string: "Waiting for a reply…"
             // already ships as `activity.waitingForReply`, and two source
             // strings this close collide into one symbol in `xcstringstool`.
             return String(localized: "chat.waitingForConnection",
-                          defaultValue: "Waiting for a connection…")  // xcstrings: chat-ui
+                          defaultValue: "Waiting for a connection…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         case .answering:
             let name = backendName.trimmingCharacters(in: .whitespacesAndNewlines)
             if name.isEmpty {
-                return String(localized: "Answering…")  // xcstrings: chat-ui
+                return String(localized: "Answering…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
             }
-            return String(localized: "\(name) is answering…")  // xcstrings: chat-ui
+            return String(localized: "\(name) is answering…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
     }
 }

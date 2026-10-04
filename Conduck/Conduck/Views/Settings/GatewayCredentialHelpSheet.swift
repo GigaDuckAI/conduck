@@ -53,7 +53,7 @@ struct GatewayCredentialHelpSheet: View {
             .navigationTitle(Text(LocalizedStringResource(
                 "settings.remoteAgent.credentialHelp.title",
                 defaultValue: "Where do I find these?"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -62,7 +62,7 @@ struct GatewayCredentialHelpSheet: View {
                     Button(LocalizedStringResource(
                         "settings.remoteAgent.credentialHelp.done",
                         defaultValue: "Done"
-                    )) {
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         dismiss()
                     }
                 }
@@ -76,7 +76,7 @@ struct GatewayCredentialHelpSheet: View {
         Text(LocalizedStringResource(
             "settings.remoteAgent.credentialHelp.intro",
             defaultValue: "Both values belong to the server you run. You're looking for them on that machine, not on this device."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         .font(.subheadline)
         .foregroundStyle(AppColors.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -92,7 +92,7 @@ struct GatewayCredentialHelpSheet: View {
                 title: LocalizedStringResource(
                     "settings.remoteAgent.credentialHelp.token.header",
                     defaultValue: "The bearer token"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
             Text(source.tokenBody)
             .font(.subheadline)
@@ -104,7 +104,7 @@ struct GatewayCredentialHelpSheet: View {
                 label: LocalizedStringResource(
                     "settings.remoteAgent.credentialHelp.token.keyLabel",
                     defaultValue: "Key"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 code: source.tokenKey
             )
         }
@@ -124,12 +124,12 @@ struct GatewayCredentialHelpSheet: View {
                 title: LocalizedStringResource(
                     "settings.remoteAgent.credentialHelp.address.header",
                     defaultValue: "The gateway URL"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
             Text(LocalizedStringResource(
                 "settings.remoteAgent.credentialHelp.address.body",
                 defaultValue: "It's the https address of that same server. Unless you changed it, the port is:"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.subheadline)
             .foregroundStyle(AppColors.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -184,7 +184,7 @@ struct GatewayCredentialHelpSheet: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.credentialHelp.troubleshooting",
                         defaultValue: "Still won't connect? Read the setup guide"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     Image(systemName: "arrow.up.right")
                         .font(.caption)
                 }

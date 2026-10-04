@@ -29,7 +29,7 @@ struct WorkDeskMaterialPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                Text(LocalizedStringResource("workdesk.conversation.addMaterials.title", defaultValue: "Materials from Work"))
+                Text(LocalizedStringResource("workdesk.conversation.addMaterials.title", defaultValue: "Materials from Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.title2.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
@@ -39,13 +39,13 @@ struct WorkDeskMaterialPicker: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(LocalizedStringResource("workdesk.conversation.addMaterials.explanation", defaultValue: "Included in this conversation only. Their projects stay the same."))
+                    Text(LocalizedStringResource("workdesk.conversation.addMaterials.explanation", defaultValue: "Included in this conversation only. Their projects stay the same.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.callout).foregroundStyle(AppColors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if matching.isEmpty {
                         Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? LocalizedStringResource("workdesk.conversation.addMaterials.empty", defaultValue: "All available materials are already in this conversation.")
-                            : LocalizedStringResource("workdesk.conversation.addMaterials.noMatches", defaultValue: "No materials match your search."))
+                            ? LocalizedStringResource("workdesk.conversation.addMaterials.empty", defaultValue: "All available materials are already in this conversation.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                            : LocalizedStringResource("workdesk.conversation.addMaterials.noMatches", defaultValue: "No materials match your search.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.callout).foregroundStyle(AppColors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -62,7 +62,7 @@ struct WorkDeskMaterialPicker: View {
                                     Text(verbatim: material.name).font(.body)
                                         .fixedSize(horizontal: false, vertical: true)
                                     Label {
-                                        Text(verbatim: projectNames[material.id] ?? String(localized: "workdesk.material.unfiled", defaultValue: "No project"))
+                                        Text(verbatim: projectNames[material.id] ?? String(localized: "workdesk.material.unfiled", defaultValue: "No project", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                                     } icon: { Image(systemName: "folder") }
                                         .font(.caption).foregroundStyle(AppColors.textSecondary)
                                 }
@@ -73,13 +73,13 @@ struct WorkDeskMaterialPicker: View {
                         }.choiceCardButton(cornerRadius: 10)
                         .accessibilityAddTraits(selectedIDs.contains(material.id) ? .isSelected : [])
                         .accessibilityValue(Text(selectedIDs.contains(material.id)
-                            ? LocalizedStringResource("workdesk.brief.included", defaultValue: "Included")
-                            : LocalizedStringResource("workdesk.brief.leftOut", defaultValue: "Left out")))
+                            ? LocalizedStringResource("workdesk.brief.included", defaultValue: "Included", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                            : LocalizedStringResource("workdesk.brief.leftOut", defaultValue: "Left out", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     }
                     if selectionChanged {
-                        Text(LocalizedStringResource("workdesk.conversation.selectionChanged", defaultValue: "The selected materials changed. Choose them again."))
+                        Text(LocalizedStringResource("workdesk.conversation.selectionChanged", defaultValue: "The selected materials changed. Choose them again.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.callout).foregroundStyle(AppColors.textSecondary)
-                        Button(LocalizedStringResource("workdesk.conversation.clearSelection", defaultValue: "Clear selection")) { selectedIDs = [] }
+                        Button(LocalizedStringResource("workdesk.conversation.clearSelection", defaultValue: "Clear selection", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { selectedIDs = [] }
                             .inlineLinkButton()
                     }
                 }
@@ -106,7 +106,7 @@ struct WorkDeskMaterialPicker: View {
                 .foregroundStyle(AppColors.textTertiary)
                 .accessibilityHidden(true)
             TextField(text: $search) {
-                Text(LocalizedStringResource("workdesk.conversation.findMaterial", defaultValue: "Find a material"))
+                Text(LocalizedStringResource("workdesk.conversation.findMaterial", defaultValue: "Find a material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             .textFieldStyle(.plain)
             .focused($searchFocused)
@@ -120,7 +120,7 @@ struct WorkDeskMaterialPicker: View {
                         .frame(width: WorkboardMetrics.touchTarget, height: WorkboardMetrics.touchTarget)
                 }
                 .pointerIconButton(size: WorkboardMetrics.touchTarget)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.search.clear", defaultValue: "Clear search")))
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.search.clear", defaultValue: "Clear search", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
         }
         .padding(.leading, 12)
@@ -133,7 +133,7 @@ struct WorkDeskMaterialPicker: View {
         HStack(spacing: 12) {
             Spacer(minLength: 0)
             Button { dismiss() } label: {
-                Text(LocalizedStringResource("common.cancel", defaultValue: "Cancel"))
+                Text(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.body.weight(.medium))
                     .padding(.horizontal, 18)
                     .padding(.vertical, 10)
@@ -147,7 +147,7 @@ struct WorkDeskMaterialPicker: View {
                       onAdd(materials.filter { selectedIDs.contains($0.id) }) else { return }
                 dismiss()
             } label: {
-                Text(LocalizedStringResource("workdesk.conversation.addSelected", defaultValue: "Add selected"))
+                Text(LocalizedStringResource("workdesk.conversation.addSelected", defaultValue: "Add selected", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.black)
                     .padding(.horizontal, 18)

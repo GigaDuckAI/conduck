@@ -73,15 +73,15 @@ enum SessionContinuationPolicy: String, Codable, Sendable, CaseIterable, Identif
     var label: LocalizedStringResource {
         switch self {
         case .alwaysNew:
-            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.alwaysNew", defaultValue: "Never")
+            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.alwaysNew", defaultValue: "Never", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .minutes15:
-            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.minutes15", defaultValue: "If within 15 min")
+            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.minutes15", defaultValue: "If within 15 min", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .minutes30:
-            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.minutes30", defaultValue: "If within 30 min")
+            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.minutes30", defaultValue: "If within 30 min", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .minutes60:
-            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.minutes60", defaultValue: "If within 60 min")
+            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.minutes60", defaultValue: "If within 60 min", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .alwaysContinue:
-            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.alwaysContinue", defaultValue: "Always")
+            return LocalizedStringResource("settings.remoteAgent.sessionPolicy.alwaysContinue", defaultValue: "Always", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

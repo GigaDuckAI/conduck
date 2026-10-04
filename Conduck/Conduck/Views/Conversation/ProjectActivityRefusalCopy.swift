@@ -37,10 +37,10 @@ enum ProjectActivityRefusalCopy: Equatable {
         switch self {
         case .projectArchived:
             String(localized: "composer.locked.project.archived.a11yLabel",
-                   defaultValue: "Open this project in Work")  // xcstrings: chat-ui
+                   defaultValue: "Open this project in Work", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         case .projectSelectionRequired:
             String(localized: "composer.locked.project.selection.a11yLabel",
-                   defaultValue: "Choose active projects in Work")  // xcstrings: chat-ui
+                   defaultValue: "Choose active projects in Work", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
     }
 
@@ -48,10 +48,10 @@ enum ProjectActivityRefusalCopy: Equatable {
         switch self {
         case .projectArchived:
             String(localized: "composer.locked.project.archived.a11yHint",
-                   defaultValue: "This project is archived. Restore it in Work to send messages.")  // xcstrings: chat-ui
+                   defaultValue: "This project is archived. Restore it in Work to send messages.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         case .projectSelectionRequired:
             String(localized: "composer.locked.project.selection.a11yHint",
-                   defaultValue: "Choose your active projects in Work to send messages.")  // xcstrings: chat-ui
+                   defaultValue: "Choose your active projects in Work to send messages.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
     }
 

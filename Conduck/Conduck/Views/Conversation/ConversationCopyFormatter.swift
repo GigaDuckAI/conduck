@@ -24,7 +24,7 @@ enum ConversationCopyFormatter {
     static func build(messages: [MessageRecord], agentName: String) -> String {
         let trimmedName = agentName.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedAgentName = trimmedName.isEmpty
-            ? String(localized: "Personal AI")  // xcstrings: chat-ui
+            ? String(localized: "Personal AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
             : trimmedName
 
         var blocks: [String] = []
@@ -36,10 +36,10 @@ enum ConversationCopyFormatter {
             var lines: [String] = []
             if message.role == "user" {
                 lines.append(String(localized: "thread.copyAll.userLabel",
-                                    defaultValue: "You:"))  // xcstrings: chat-ui
+                                    defaultValue: "You:", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings: chat-ui
             } else {
                 lines.append(String(localized: "thread.copyAll.agentLabel",
-                                    defaultValue: "\(resolvedAgentName):"))  // xcstrings: chat-ui
+                                    defaultValue: "\(resolvedAgentName):", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings: chat-ui
             }
             if !text.isEmpty {
                 lines.append(text)
@@ -50,7 +50,7 @@ enum ConversationCopyFormatter {
             }
             if message.status == "failed" {
                 lines.append(String(localized: "thread.copyAll.notSent",
-                                    defaultValue: "[Not sent]"))  // xcstrings: chat-ui
+                                    defaultValue: "[Not sent]", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings: chat-ui
             }
             blocks.append(lines.joined(separator: "\n"))
         }
@@ -63,14 +63,14 @@ enum ConversationCopyFormatter {
     private static func placeholder(for attachment: AttachmentRecord) -> String {
         if attachment.isImage {
             return String(localized: "thread.copyAll.imageAttached",
-                          defaultValue: "[Image attached]")  // xcstrings: chat-ui
+                          defaultValue: "[Image attached]", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
         if let filename = attachment.filename?.trimmingCharacters(in: .whitespacesAndNewlines),
            !filename.isEmpty {
             return String(localized: "thread.copyAll.fileAttachedNamed",
-                          defaultValue: "[File attached: \(filename)]")  // xcstrings: chat-ui
+                          defaultValue: "[File attached: \(filename)]", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
         return String(localized: "thread.copyAll.fileAttached",
-                      defaultValue: "[File attached]")  // xcstrings: chat-ui
+                      defaultValue: "[File attached]", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 }

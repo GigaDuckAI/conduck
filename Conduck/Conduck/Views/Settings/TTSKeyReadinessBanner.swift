@@ -86,7 +86,7 @@ struct TTSKeyReadinessBanner: View {
                 Text(LocalizedStringResource(
                     "settings.voice.keyReadiness.syncHint",
                     defaultValue: "If you added the key on another device, it may not have reached this device yet."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -103,7 +103,7 @@ struct TTSKeyReadinessBanner: View {
                         Text(LocalizedStringResource(
                             "settings.voice.keyReadiness.checkAgain",
                             defaultValue: "Check Again"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }
                 }
                 // `.borderless` on macOS draws bare tinted text with no bezel, so
@@ -132,10 +132,10 @@ struct TTSKeyReadinessBanner: View {
                         Text(model.keyState == .missing
                             ? LocalizedStringResource(
                                 "settings.voice.keyReadiness.addKey",
-                                defaultValue: "Add Key")
+                                defaultValue: "Add Key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                             : LocalizedStringResource(
                                 "settings.voice.keyReadiness.manageKey",
-                                defaultValue: "Manage Key"))
+                                defaultValue: "Manage Key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }
                     // Same treatment as Check Again above.
                     #if os(macOS)
@@ -164,36 +164,36 @@ struct TTSKeyReadinessBanner: View {
             return String(
                 localized: "settings.voice.keyReadiness.missing.title.mac",
                 defaultValue: "The \(name) key isn't available on this Mac yet."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             #else
             if DeviceCapabilities.isiPad {
                 return String(
                     localized: "settings.voice.keyReadiness.missing.title.ipad",
                     defaultValue: "The \(name) key isn't available on this iPad yet."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return String(
                 localized: "settings.voice.keyReadiness.missing.title.iphone",
                 defaultValue: "The \(name) key isn't available on this iPhone yet."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             #endif
         default:
             #if os(macOS)
             return String(
                 localized: "settings.voice.keyReadiness.unreadable.title.mac",
                 defaultValue: "Conduck couldn't read the \(name) key on this Mac right now."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             #else
             if DeviceCapabilities.isiPad {
                 return String(
                     localized: "settings.voice.keyReadiness.unreadable.title.ipad",
                     defaultValue: "Conduck couldn't read the \(name) key on this iPad right now."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return String(
                 localized: "settings.voice.keyReadiness.unreadable.title.iphone",
                 defaultValue: "Conduck couldn't read the \(name) key on this iPhone right now."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             #endif
         }
     }
@@ -204,12 +204,12 @@ struct TTSKeyReadinessBanner: View {
             return String(
                 localized: "settings.voice.keyReadiness.missing.body",
                 defaultValue: "When Conduck speaks a reply here, it uses Apple's built-in voice until the key becomes available."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         default:
             return String(
                 localized: "settings.voice.keyReadiness.unreadable.body",
                 defaultValue: "Spoken replies use Apple's built-in voice for now."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }

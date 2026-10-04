@@ -59,7 +59,7 @@ struct WorkboardTutorialView: View {
             .pointerIconButton(size: 44, shape: .circle)
             .accessibilityLabel(Text(LocalizedStringResource(
                 "workdesk.tour.back", defaultValue: "Previous step"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .disabled(session.currentStep == 0)
             .opacity(session.currentStep == 0 ? 0 : 1)
             .accessibilityHidden(session.currentStep == 0)
@@ -67,16 +67,16 @@ struct WorkboardTutorialView: View {
             Spacer(minLength: 0)
             Text(LocalizedStringResource(
                 "workdesk.tour.progress", defaultValue: "\(session.currentStep + 1) of 4"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.subheadline)
             .foregroundStyle(AppColors.textSecondary)
             .accessibilityLabel(Text(LocalizedStringResource(
                 "workdesk.tour.progress.accessibility", defaultValue: "Step \(session.currentStep + 1) of 4"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             Spacer(minLength: 0)
 
             Button(action: onDone) {
-                Text(LocalizedStringResource("workdesk.tour.skip", defaultValue: "Skip tour"))
+                Text(LocalizedStringResource("workdesk.tour.skip", defaultValue: "Skip tour", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     .padding(.vertical, 10)
@@ -134,8 +134,8 @@ struct WorkboardTutorialView: View {
             }
         } label: {
             Text(session.currentStep == 3
-                 ? LocalizedStringResource("workdesk.tour.done", defaultValue: "Go to Work")
-                 : LocalizedStringResource("workdesk.tour.next", defaultValue: "Next"))
+                 ? LocalizedStringResource("workdesk.tour.done", defaultValue: "Go to Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                 : LocalizedStringResource("workdesk.tour.next", defaultValue: "Next", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.headline)
                 .foregroundStyle(AppColors.background)
                 .frame(maxWidth: .infinity)

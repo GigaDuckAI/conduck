@@ -44,7 +44,7 @@ struct RecordingStatusIndicator: View {
             Text(String(localized: LocalizedStringResource(
                 "recording.oneMinuteLeft",
                 defaultValue: "1 min left"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(AppColors.warning)
             .opacity(nearMaxDuration ? 1 : 0)
@@ -129,7 +129,7 @@ struct TranscribingIndicator: View {
             Text(String(localized: LocalizedStringResource(
                 "recording.transcribing",
                 defaultValue: "Transcribing…"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .font(.system(size: 13))
             .foregroundStyle(AppColors.textSecondary)
         }
@@ -192,7 +192,7 @@ struct PreparingVoiceIndicator: View {
         String(localized: LocalizedStringResource(
             "recording.preparingVoice",
             defaultValue: "Setting up voice…"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 }
 
@@ -217,12 +217,12 @@ enum VoiceRecoveryOption: Equatable {
             return String(localized: LocalizedStringResource(
                 "voice.recovery.useCloud",
                 defaultValue: "Use cloud voice"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .openVoiceSettings:
             return String(localized: LocalizedStringResource(
                 "voice.recovery.openSettings",
                 defaultValue: "Open Voice Settings"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 }

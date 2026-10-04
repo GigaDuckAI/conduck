@@ -198,7 +198,7 @@ struct WorkDeskConversationView: View {
                     Text(LocalizedStringResource(
                         "workdesk.conversation.connectionUnavailable",
                         defaultValue: "This conversation's connection is unavailable. Its messages remain here."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.callout)
                     .foregroundStyle(AppColors.textSecondary)
                     .padding(16)
@@ -216,7 +216,7 @@ struct WorkDeskConversationView: View {
                     RoundedRectangle(cornerRadius: 16)
                         .strokeBorder(AppColors.brandAmber, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
                         .background(AppColors.brandAmber.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-                    Text(LocalizedStringResource("composer.drop.prompt", defaultValue: "Drop files to attach"))
+                    Text(LocalizedStringResource("composer.drop.prompt", defaultValue: "Drop files to attach", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.headline)
                         .foregroundStyle(AppColors.brandAmber)
                         .padding(16)
@@ -319,7 +319,7 @@ struct WorkDeskConversationView: View {
             session.draft = appendingTranscript(text, to: session.draft)
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.transcriptAdded", defaultValue: "Transcript added"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .failure(let error):
             switch error {
             case .appleSpeechModelNotInstalled, .appleSpeechLanguageUnsupported:

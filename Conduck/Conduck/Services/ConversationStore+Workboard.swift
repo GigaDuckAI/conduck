@@ -716,7 +716,7 @@ extension ConversationStore {
         let conversation = try await fetchConversation(id: conversationID)
         let conversationTitle = await MainActor.run {
             conversation?.displayTitle
-                ?? String(localized: "workboard.chatCapture.conversation", defaultValue: "Chat")
+                ?? String(localized: "workboard.chatCapture.conversation", defaultValue: "Chat", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         let messageText = persistedMessage.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let isUser = persistedMessage.role == "user"
@@ -742,12 +742,12 @@ extension ConversationStore {
                         id: persistedMessage.id,
                         kind: .note,
                         title: isUser
-                            ? String(localized: "workboard.chatCapture.message", defaultValue: "Chat message")
-                            : String(localized: "workboard.chatCapture.response", defaultValue: "Chat response"),
+                            ? String(localized: "workboard.chatCapture.message", defaultValue: "Chat message", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                            : String(localized: "workboard.chatCapture.response", defaultValue: "Chat response", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                         // The desk collects from every surface, so the card
                         // itself has to say which conversation it came from.
                         caption: String.localizedStringWithFormat(
-                            String(localized: "workboard.chatCapture.context", defaultValue: "Captured from %@."),
+                            String(localized: "workboard.chatCapture.context", defaultValue: "Captured from %@.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                             conversationTitle
                         ),
                         textContent: messageText,
@@ -793,7 +793,7 @@ extension ConversationStore {
             // repair, so it is still skipped.
             if alreadyOnDesk, localPayload == nil { continue }
             let name = attachment.filename
-                ?? String(localized: "workboard.chatCapture.attachment", defaultValue: "Chat attachment")
+                ?? String(localized: "workboard.chatCapture.attachment", defaultValue: "Chat attachment", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             let material: WorkMaterialDraft
             if attachment.isServerReference {
                 referencedOnly += 1
@@ -804,12 +804,12 @@ extension ConversationStore {
                     caption: String(
                         localized: "workboard.chatCapture.remote.caption",
                         defaultValue: "Available in the original chat"
-                    ),
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     textContent: String.localizedStringWithFormat(
                         String(
                             localized: "workboard.chatCapture.remote.detail",
                             defaultValue: "%@ stays on your gateway. Open the original chat to retrieve it."
-                        ),
+                        , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                         name
                     ),
                     storageMode: .metadataOnly,
@@ -840,12 +840,12 @@ extension ConversationStore {
                     caption: String(
                         localized: "workboard.chatCapture.unavailable.caption",
                         defaultValue: "Reattach in Work"
-                    ),
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     textContent: String.localizedStringWithFormat(
                         String(
                             localized: "workboard.chatCapture.unavailable.detail",
                             defaultValue: "%@ could not be copied from this device. Reattach it in Work to open it."
-                        ),
+                        , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                         name
                     ),
                     storageMode: .metadataOnly,

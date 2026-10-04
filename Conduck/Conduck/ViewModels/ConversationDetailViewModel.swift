@@ -639,7 +639,7 @@ final class ConversationDetailViewModel {
     /// conversation's stored `backend` (not the global default), so the bound
     /// backend names whoever actually answers. Falls back to the default
     /// backend, then "Personal AI" when no backend is configured.
-    var backendDisplayName: String = String(localized: "Personal AI")  // xcstrings: chat-ui
+    var backendDisplayName: String = String(localized: "Personal AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
 
     /// Everything the chat header needs to draw its gateway pill, memoized per
     /// conversation for the length of the session. See `headerMemo`.
@@ -1619,7 +1619,7 @@ final class ConversationDetailViewModel {
                 outputRecheckStates = survivingStates
             }
         } catch {
-            loadError = String(localized: "Couldn't load this conversation. Try again.")
+            loadError = String(localized: "Couldn't load this conversation. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         hasLoadedInitialMessages = true
         rememberHeaderIdentity()
@@ -3009,7 +3009,7 @@ final class ConversationDetailViewModel {
             // most users to debug a server that is working perfectly.
             return LocalizedStringResource(
                 "thread.outputs.result.couldNotCheck",
-                defaultValue: "Couldn't finish the check just now.")
+                defaultValue: "Couldn't finish the check just now.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .delivered(let fileCount):
             guard hasStandingRow else {
                 // NOTHING LEFT TO ANNOTATE, which is the same rule a clean
@@ -3031,7 +3031,7 @@ final class ConversationDetailViewModel {
             // refused them exists to keep out of the app's own voice.
             return LocalizedStringResource(
                 "thread.outputs.result.delivered",
-                defaultValue: "^[\(fileCount) file](inflect: true) came back.")
+                defaultValue: "^[\(fileCount) file](inflect: true) came back.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .noneFound(let chipCount), .undeliverableEntries(_, let chipCount):
             guard !hasStandingRow else {
                 // The row is the richer surface and it is already saying what
@@ -3046,7 +3046,7 @@ final class ConversationDetailViewModel {
                 // longer arrive here to deny its own chips.
                 return LocalizedStringResource(
                     "thread.outputs.result.nothingNew",
-                    defaultValue: "Nothing new came back.")
+                    defaultValue: "Nothing new came back.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             }
             // BELOW HERE THE FOLDER HAS NO ROW SPEAKING FOR IT, which for a
             // refusal count is the narrow window before the census this same
@@ -3073,7 +3073,7 @@ final class ConversationDetailViewModel {
                 // tool.
                 return LocalizedStringResource(
                     "thread.outputs.result.undeliverable",
-                    defaultValue: "The folder for this reply held ^[\(count) file](inflect: true) Conduck can't hand over.")
+                    defaultValue: "The folder for this reply held ^[\(count) file](inflect: true) Conduck can't hand over.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             }
             // THE SUBJECT OF THE SENTENCE IS THE LOOK, NOT THE FOLDER, and the
             // absolute wording only reads that way while the reply is empty. With
@@ -3088,7 +3088,7 @@ final class ConversationDetailViewModel {
             if chipCount > 0 {
                 return LocalizedStringResource(
                     "thread.outputs.result.nothingNew",
-                    defaultValue: "Nothing new came back.")
+                    defaultValue: "Nothing new came back.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             }
             // DISCOVERY, never a claim about the agent. The server answered and
             // there was nothing to hand over — which is equally consistent with
@@ -3097,7 +3097,7 @@ final class ConversationDetailViewModel {
             // nothing" would pick one of those out of no evidence.
             return LocalizedStringResource(
                 "thread.outputs.result.noneFound",
-                defaultValue: "No returned files were discovered.")
+                defaultValue: "No returned files were discovered.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -3846,7 +3846,7 @@ final class ConversationDetailViewModel {
             boundGatewayAvailable = true
         } else {
             boundRef = nil
-            backendDisplayName = String(localized: "Personal AI")  // xcstrings: chat-ui
+            backendDisplayName = String(localized: "Personal AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
             boundGatewayAvailable = true
         }
         await refreshCurrentFileLaneID()
@@ -3954,7 +3954,7 @@ final class ConversationDetailViewModel {
             return cloned.conversation.id
         } catch {
             setSendNotice(String(localized: "remoteAgent.clone.failed",
-                               defaultValue: "Couldn't clone this conversation. Try again."))
+                               defaultValue: "Couldn't clone this conversation. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             return nil
         }
     }
@@ -3994,7 +3994,7 @@ final class ConversationDetailViewModel {
     /// local acceptance never happened, so the user can retry the intact
     /// composer after the gateway/file settings settle.
     func reportComposerDispatchRejection() {
-        setSendNotice(String(localized: "Couldn't send that message. Try again."))
+        setSendNotice(String(localized: "Couldn't send that message. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
     }
 
     /// Clear the banner and its code together.
@@ -4021,7 +4021,7 @@ final class ConversationDetailViewModel {
             await reload()
             return record
         } catch {
-            loadError = String(localized: "Couldn't send that message. Try again.")
+            loadError = String(localized: "Couldn't send that message. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return nil
         }
     }
@@ -4211,7 +4211,7 @@ final class ConversationDetailViewModel {
             setSendNotice(String(localized: LocalizedStringResource(
                 "send.attachment.dropped",
                 defaultValue: "An attachment couldn't be read and wasn't included."
-            )))  // xcstrings: hardening
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))  // xcstrings: hardening
         }
 
         // Optimistic user bubble — append + reload so it shows the instant STT
@@ -4245,7 +4245,7 @@ final class ConversationDetailViewModel {
             setSendNotice(refusal.localizedDescription)
             userRecord = nil
         } catch {
-            loadError = String(localized: "Couldn't send that message. Try again.")
+            loadError = String(localized: "Couldn't send that message. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             userRecord = nil
         }
         guard let userRecord else {

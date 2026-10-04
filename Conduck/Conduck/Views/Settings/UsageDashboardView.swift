@@ -99,8 +99,8 @@ struct UsageDashboardView: View {
 /// keep their own category enum, and a title or glyph copied into all three is a
 /// drift waiting to happen.
 enum UsageDashboardIdentity {
-    static let title = LocalizedStringResource(
-        "settings.usage.title", defaultValue: "Usage")
+    static var title: LocalizedStringResource { LocalizedStringResource(
+        "settings.usage.title", defaultValue: "Usage", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     static let systemImage = "chart.bar.xaxis"
 }
@@ -157,7 +157,7 @@ struct UsageRangeSection: View {
                 selection: $model.range,
                 options: UsageDashboardModel.Range.allCases,
                 label: Text(LocalizedStringResource(
-                    "settings.usage.range.label", defaultValue: "Range")),
+                    "settings.usage.range.label", defaultValue: "Range", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 title: { Text($0.title) }
             )
             .settingsCardPassiveRow()
@@ -195,7 +195,7 @@ enum UsageLoadSections {
                     retry()
                 } label: {
                     Text(LocalizedStringResource(
-                        "settings.usage.error.retry", defaultValue: "Try Again"))
+                        "settings.usage.error.retry", defaultValue: "Try Again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
                 .buttonStyle(.bordered)
             }
@@ -210,7 +210,7 @@ enum UsageLoadSections {
                 ProgressView()
                     .controlSize(.small)
                 Text(LocalizedStringResource(
-                    "settings.usage.loading", defaultValue: "Reading your history…"))
+                    "settings.usage.loading", defaultValue: "Reading your history…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textSecondary)
             }
             .settingsCardPassiveRow()
@@ -355,7 +355,7 @@ struct UsageDashboardContent: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(LocalizedStringResource(
                     "settings.usage.empty.title",
-                    defaultValue: "No usage recorded yet"))
+                    defaultValue: "No usage recorded yet", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.headline)
                     .foregroundStyle(AppColors.textPrimary)
                 Text(LocalizedStringResource(
@@ -364,7 +364,7 @@ struct UsageDashboardContent: View {
                         Usage appears here after your next conversation. Conduck \
                         measures the requests it sends to your gateway, and keeps \
                         the measurements on your own devices.
-                        """))
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -379,13 +379,13 @@ struct UsageDashboardContent: View {
         Section {
             Text(LocalizedStringResource(
                 "settings.usage.emptyRange",
-                defaultValue: "No activity in this range. Try a longer one."))
+                defaultValue: "No activity in this range. Try a longer one.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.activity.header", defaultValue: "Activity"))
+                "settings.usage.activity.header", defaultValue: "Activity", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -396,7 +396,7 @@ struct UsageDashboardContent: View {
         } label: {
             HStack {
                 Text(LocalizedStringResource(
-                    "settings.usage.counting.title", defaultValue: "How usage is counted"))
+                    "settings.usage.counting.title", defaultValue: "How usage is counted", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 Spacer()
                 Image(systemName: showingCountingExplanation ? "chevron.up" : "chevron.down")
                     .accessibilityHidden(true)
@@ -404,12 +404,12 @@ struct UsageDashboardContent: View {
         }
         .settingsCardRowButton()
         .accessibilityValue(Text(showingCountingExplanation
-            ? LocalizedStringResource("settings.usage.counting.expanded", defaultValue: "Expanded")
-            : LocalizedStringResource("settings.usage.counting.collapsed", defaultValue: "Collapsed")))
+            ? LocalizedStringResource("settings.usage.counting.expanded", defaultValue: "Expanded", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("settings.usage.counting.collapsed", defaultValue: "Collapsed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         if showingCountingExplanation {
             Text(LocalizedStringResource(
                 "settings.usage.counting.body",
-                defaultValue: "A turn is one message; a retry adds another attempt. Shares include all recorded attempts. Success rates use succeeded and failed attempts. Reply times cover successful replies. Token reporting may be incomplete and is not a bill. Removing gateways or conversations keeps their usage history."))
+                defaultValue: "A turn is one message; a retry adds another attempt. Shares include all recorded attempts. Success rates use succeeded and failed attempts. Reply times cover successful replies. Token reporting may be incomplete and is not a bill. Removing gateways or conversations keeps their usage history.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -439,7 +439,7 @@ struct UsageDashboardContent: View {
             countingExplanationRows
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.activity.header", defaultValue: "Activity"))
+                "settings.usage.activity.header", defaultValue: "Activity", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -458,21 +458,21 @@ struct UsageDashboardContent: View {
         var tiles: [UsageActivityStat] = [
             UsageActivityStat(
                 id: "turns",
-                value: summary.attemptedTurns.formatted(.number),
+                value: summary.attemptedTurns.formatted(.number.locale(AppLocalization.locale)),
                 label: LocalizedStringResource(
-                    "settings.usage.stat.turns", defaultValue: "Turns"),
+                    "settings.usage.stat.turns", defaultValue: "Turns", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.stat.turns.a11y",
-                    defaultValue: "\(summary.attemptedTurns) turns sent")
+                    defaultValue: "\(summary.attemptedTurns) turns sent", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             ),
             UsageActivityStat(
                 id: "completed",
-                value: summary.completedTurns.formatted(.number),
+                value: summary.completedTurns.formatted(.number.locale(AppLocalization.locale)),
                 label: LocalizedStringResource(
-                    "settings.usage.stat.completed", defaultValue: "Completed"),
+                    "settings.usage.stat.completed", defaultValue: "Completed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.stat.completed.a11y",
-                    defaultValue: "\(summary.completedTurns) turns completed")
+                    defaultValue: "\(summary.completedTurns) turns completed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             ),
             // Threads WITH USAGE, which is not the same as threads the user
             // still has: the ledger outlives a deleted conversation, so this
@@ -480,12 +480,12 @@ struct UsageDashboardContent: View {
             // footer is where that is said in words.
             UsageActivityStat(
                 id: "conversations",
-                value: summary.threadsWithUsage.formatted(.number),
+                value: summary.threadsWithUsage.formatted(.number.locale(AppLocalization.locale)),
                 label: LocalizedStringResource(
-                    "settings.usage.stat.conversations", defaultValue: "Conversations"),
+                    "settings.usage.stat.conversations", defaultValue: "Conversations", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.stat.conversations.a11y.withUsage",
-                    defaultValue: "\(summary.threadsWithUsage) conversations with recorded usage")
+                    defaultValue: "\(summary.threadsWithUsage) conversations with recorded usage", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
         ]
         if let tokens = summary.usableTokenTotal {
@@ -495,12 +495,12 @@ struct UsageDashboardContent: View {
                 // speaks: four columns cannot hold "1,284,930", and a tile is
                 // an at-a-glance figure. The Tokens card separately details
                 // the provider-reported fields and their coverage.
-                value: tokens.formatted(.number.notation(.compactName)),
+                value: tokens.formatted(.number.notation(.compactName).locale(AppLocalization.locale)),
                 label: LocalizedStringResource(
-                    "settings.usage.stat.tokens", defaultValue: "Tokens"),
+                    "settings.usage.stat.tokens", defaultValue: "Tokens", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.stat.tokens.a11y.usable",
-                    defaultValue: "\(tokens.formatted(.number)) tokens, using reported totals or input plus output")
+                    defaultValue: "\(tokens.formatted(.number.locale(AppLocalization.locale))) tokens, using reported totals or input plus output", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             ))
         }
         return tiles
@@ -572,7 +572,7 @@ struct UsageDashboardContent: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.input.header", defaultValue: "Input"))
+                "settings.usage.input.header", defaultValue: "Input", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         // NO FOOTER. "Typed 41 · Voice 12" under a header reading Input is
         // already the whole sentence a footer would have written out.
@@ -604,7 +604,7 @@ struct UsageDashboardContent: View {
         let share = GatewayUsageAggregator.ratio(slice.turns, total)
         return String(
             localized: "settings.usage.input.value",
-            defaultValue: "\(slice.turns.formatted(.number)) · \(percentText(share))")
+            defaultValue: "\(slice.turns.formatted(.number.locale(AppLocalization.locale))) · \(percentText(share))", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Modality glyphs, matching the ones a turn already wears in the thread.
@@ -620,11 +620,11 @@ struct UsageDashboardContent: View {
     private func inputModeLabel(_ mode: GatewayInputMode) -> String {
         switch mode {
         case .voice:
-            return String(localized: "settings.usage.input.voice", defaultValue: "Voice")
+            return String(localized: "settings.usage.input.voice", defaultValue: "Voice", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .text:
-            return String(localized: "settings.usage.input.text", defaultValue: "Typed")
+            return String(localized: "settings.usage.input.text", defaultValue: "Typed", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .shared:
-            return String(localized: "settings.usage.input.shared", defaultValue: "Shared")
+            return String(localized: "settings.usage.input.shared", defaultValue: "Shared", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unknown:
             return unattributedLabel
         }
@@ -640,18 +640,18 @@ struct UsageDashboardContent: View {
                 value: percentText(summary.resolvedAttemptSuccessRate),
                 label: LocalizedStringResource(
                     "settings.usage.reliability.headline",
-                    defaultValue: "of resolved attempts succeeded"),
+                    defaultValue: "of resolved attempts succeeded", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.reliability.headline.a11y",
                     defaultValue: """
                         \(percentText(summary.resolvedAttemptSuccessRate)) of \
                         resolved attempts succeeded
-                        """)
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
             reliabilityDetail
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.reliability.header", defaultValue: "Reliability"))
+                "settings.usage.reliability.header", defaultValue: "Reliability", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             reliabilityFooter
         }
@@ -697,9 +697,9 @@ struct UsageDashboardContent: View {
         .settingsCardRowButton()
         .accessibilityHint(Text(reliabilityDetailExpanded
             ? LocalizedStringResource(
-                "settings.usage.reliability.details.collapse", defaultValue: "Collapse")
+                "settings.usage.reliability.details.collapse", defaultValue: "Collapse", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             : LocalizedStringResource(
-                "settings.usage.reliability.details.expand", defaultValue: "Expand")))
+                "settings.usage.reliability.details.expand", defaultValue: "Expand", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
 
         if reliabilityDetailExpanded {
             reliabilityDetailRows
@@ -732,7 +732,7 @@ struct UsageDashboardContent: View {
         valueRow(
             label: LocalizedStringResource(
                 "settings.usage.reliability.firstTry",
-                defaultValue: "Delivered first try"),
+                defaultValue: "Delivered first try", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             value: percentText(GatewayUsageAggregator.ratio(
                 summary.firstAttemptDeliveredTurns, summary.resolvedTurns)),
             caption: LocalizedStringResource(
@@ -740,7 +740,7 @@ struct UsageDashboardContent: View {
                 defaultValue: """
                     \(summary.firstAttemptDeliveredTurns) of \
                     \(summary.resolvedTurns) finished turns
-                    """)
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         )
         // Only where there is something to recover FROM. With no retry in
         // range the row is a permanent em dash under a question nobody asked.
@@ -752,7 +752,7 @@ struct UsageDashboardContent: View {
             valueRow(
                 label: LocalizedStringResource(
                     "settings.usage.reliability.recovered",
-                    defaultValue: "Recovered by retry"),
+                    defaultValue: "Recovered by retry", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 value: percentText(GatewayUsageAggregator.ratio(
                     summary.retriedTurnsRecovered, summary.resolvedRetriedTurns)),
                 caption: LocalizedStringResource(
@@ -760,22 +760,22 @@ struct UsageDashboardContent: View {
                     defaultValue: """
                         \(summary.retriedTurnsRecovered) of \
                         \(summary.resolvedRetriedTurns) retried turns landed
-                        """)
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
         }
 
         valueRow(
             label: LocalizedStringResource(
-                "settings.usage.reliability.retryRate", defaultValue: "Retry rate"),
+                "settings.usage.reliability.retryRate", defaultValue: "Retry rate", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             value: percentText(summary.retryRate),
             caption: LocalizedStringResource(
                 "settings.usage.reliability.retryRate.caption",
-                defaultValue: "\(summary.retriedTurns) of \(summary.attemptedTurns) turns retried")
+                defaultValue: "\(summary.retriedTurns) of \(summary.attemptedTurns) turns retried", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         )
         valueRow(
             label: LocalizedStringResource(
                 "settings.usage.reliability.attemptsPerTurn",
-                defaultValue: "Attempts per completed turn"),
+                defaultValue: "Attempts per completed turn", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             value: decimalText(summary.attemptsPerCompletedTurn),
             caption: nil
         )
@@ -783,8 +783,8 @@ struct UsageDashboardContent: View {
             valueRow(
                 label: LocalizedStringResource(
                     "settings.usage.reliability.truncated",
-                    defaultValue: "Replies cut short"),
-                value: summary.truncatedReplies.formatted(.number),
+                    defaultValue: "Replies cut short", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
+                value: summary.truncatedReplies.formatted(.number.locale(AppLocalization.locale)),
                 caption: nil,
                 icon: "scissors"
             )
@@ -808,7 +808,7 @@ struct UsageDashboardContent: View {
             "settings.usage.reliability.footer.rate",
             defaultValue: """
                 Cancelled and unconfirmed attempts stay out of this rate.
-                """))
+                """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The outcome mix, reported WHOLE — a high unconfirmed count is exactly
@@ -832,14 +832,14 @@ struct UsageDashboardContent: View {
             icon: "checkmark.circle.fill",
             tint: AppColors.success,
             label: LocalizedStringResource(
-                "settings.usage.outcome.succeeded", defaultValue: "Succeeded"),
+                "settings.usage.outcome.succeeded", defaultValue: "Succeeded", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             count: mix.succeeded
         )
         outcomeRow(
             icon: "xmark.circle.fill",
             tint: AppColors.error,
             label: LocalizedStringResource(
-                "settings.usage.outcome.failed", defaultValue: "Failed"),
+                "settings.usage.outcome.failed", defaultValue: "Failed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             count: mix.failed
         )
         if mix.cancelled > 0 {
@@ -847,7 +847,7 @@ struct UsageDashboardContent: View {
                 icon: "stop.circle",
                 tint: AppColors.textSecondary,
                 label: LocalizedStringResource(
-                    "settings.usage.outcome.cancelled", defaultValue: "Cancelled"),
+                    "settings.usage.outcome.cancelled", defaultValue: "Cancelled", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 count: mix.cancelled
             )
         }
@@ -859,7 +859,7 @@ struct UsageDashboardContent: View {
                 icon: "questionmark.diamond",
                 tint: AppColors.warning,
                 label: LocalizedStringResource(
-                    "settings.usage.outcome.unknown", defaultValue: "Unclassified"),
+                    "settings.usage.outcome.unknown", defaultValue: "Unclassified", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 count: mix.unknown
             )
         }
@@ -868,7 +868,7 @@ struct UsageDashboardContent: View {
                 icon: "questionmark.circle",
                 tint: AppColors.warning,
                 label: LocalizedStringResource(
-                    "settings.usage.outcome.unconfirmed", defaultValue: "Unconfirmed"),
+                    "settings.usage.outcome.unconfirmed", defaultValue: "Unconfirmed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 count: mix.unconfirmed
             )
         }
@@ -879,7 +879,7 @@ struct UsageDashboardContent: View {
                 icon: "ellipsis.circle",
                 tint: AppColors.textTertiary,
                 label: LocalizedStringResource(
-                    "settings.usage.outcome.inProgress", defaultValue: "In progress"),
+                    "settings.usage.outcome.inProgress", defaultValue: "In progress", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 count: inProgress
             )
         }
@@ -913,7 +913,7 @@ struct UsageDashboardContent: View {
 
             Text(LocalizedStringResource(
                 "settings.usage.reliability.reasons.header",
-                defaultValue: "Failure reasons"))
+                defaultValue: "Failure reasons", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppColors.textTertiary)
                 .settingsCardPassiveRow()
@@ -934,7 +934,7 @@ struct UsageDashboardContent: View {
                 // there is no single filter it could carry.
                 failureReasonRow(
                     label: String(localized: "settings.usage.reliability.reasons.other",
-                                  defaultValue: "Other reasons"),
+                                  defaultValue: "Other reasons", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     count: otherCount
                 )
             }
@@ -975,7 +975,7 @@ struct UsageDashboardContent: View {
                 .foregroundStyle(AppColors.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 12)
-            Text(count.formatted(.number))
+            Text(count.formatted(.number.locale(AppLocalization.locale)))
                 .font(.subheadline)
                 .monospacedDigit()
                 .foregroundStyle(AppColors.textSecondary)
@@ -991,7 +991,7 @@ struct UsageDashboardContent: View {
             if timing.sampleCount == 0 {
                 Text(LocalizedStringResource(
                     "settings.usage.response.none",
-                    defaultValue: "No attempt in this range finished with usable timing."))
+                    defaultValue: "No attempt in this range finished with usable timing.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .settingsCardPassiveRow()
@@ -1000,10 +1000,10 @@ struct UsageDashboardContent: View {
                     statTile(
                         value: durationText(timing.mean),
                         label: LocalizedStringResource(
-                            "settings.usage.response.average", defaultValue: "Average"),
+                            "settings.usage.response.average", defaultValue: "Average", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         accessibility: LocalizedStringResource(
                             "settings.usage.response.average.a11y",
-                            defaultValue: "Average full-response time \(durationText(timing.mean))"),
+                            defaultValue: "Average full-response time \(durationText(timing.mean))", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         prominent: true
                     )
                     // Withheld below the aggregator's minimum sample count: a
@@ -1014,10 +1014,10 @@ struct UsageDashboardContent: View {
                             value: durationText(p90),
                             label: LocalizedStringResource(
                                 "settings.usage.response.p90",
-                                defaultValue: "90th percentile"),
+                                defaultValue: "90th percentile", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             accessibility: LocalizedStringResource(
                                 "settings.usage.response.p90.a11y",
-                                defaultValue: "90th percentile full-response time \(durationText(p90))"),
+                                defaultValue: "90th percentile full-response time \(durationText(p90))", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             prominent: true
                         )
                     }
@@ -1031,7 +1031,7 @@ struct UsageDashboardContent: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.response.header", defaultValue: "Full-response time"))
+                "settings.usage.response.header", defaultValue: "Full-response time", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             // KEPT: without it an average is read as model speed, and a slow
             // agent looks like a slow app. The clause that earns the line is
@@ -1041,7 +1041,7 @@ struct UsageDashboardContent: View {
                 defaultValue: """
                     Includes the network and any tools your agent ran — not \
                     model latency.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -1054,7 +1054,7 @@ struct UsageDashboardContent: View {
             if tokens.isEmpty {
                 Text(LocalizedStringResource(
                     "settings.usage.tokens.none",
-                    defaultValue: "Not reported by your gateway."))
+                    defaultValue: "Not reported by your gateway.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .settingsCardPassiveRow()
@@ -1068,7 +1068,7 @@ struct UsageDashboardContent: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.tokens.header", defaultValue: "Reported tokens"))
+                "settings.usage.tokens.header", defaultValue: "Reported tokens", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             // The header already says "Reported" and each row carries its own
             // coverage caption. The ONE caveat neither can carry is that this
@@ -1082,7 +1082,7 @@ struct UsageDashboardContent: View {
                     defaultValue: """
                         Each gateway counts tokens its own way, so these figures \
                         add up numbers that were not counted alike.
-                        """))
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -1113,7 +1113,7 @@ struct UsageDashboardContent: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.byDevice.header", defaultValue: "By device"))
+                "settings.usage.byDevice.header", defaultValue: "By device", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text(UsageDetailFormat.shareCaption)
@@ -1204,7 +1204,7 @@ struct UsageDashboardContent: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.byGateway.header", defaultValue: "By gateway"))
+                "settings.usage.byGateway.header", defaultValue: "By gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text(UsageDetailFormat.shareCaption)
@@ -1288,25 +1288,25 @@ struct UsageDashboardContent: View {
                 UsageValueRow(
                     verbatimLabel: String(
                         localized: "settings.usage.byModel.other",
-                        defaultValue: "Other models"),
+                        defaultValue: "Other models", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     value: UsageDetailFormat.shareText(attempts, of: total) ?? "",
                     verbatimCaption: String(
                         localized: "settings.usage.byModel.other.caption",
                         defaultValue: """
                             \(UsageDetailFormat.attemptsText(attempts)) across \
                             \(rest.count) models
-                            """)
+                            """, bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.byModel.header", defaultValue: "Requested models"))
+                "settings.usage.byModel.header", defaultValue: "Requested models", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text(UsageDetailFormat.shareCaption)
                 Text(LocalizedStringResource(
                     "settings.usage.byModel.footer",
-                    defaultValue: "Based on the model each request asked for."))
+                    defaultValue: "Based on the model each request asked for.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -1337,13 +1337,13 @@ struct UsageDashboardContent: View {
             if ranking.threads.count > top.count {
                 navigationRow(value: UsageRoute.allThreads) {
                     Text(LocalizedStringResource(
-                        "settings.usage.threads.seeAll", defaultValue: "See all"))
+                        "settings.usage.threads.seeAll", defaultValue: "See all", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .foregroundStyle(AppColors.textPrimary)
                 }
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.threads.header", defaultValue: "Heaviest threads"))
+                "settings.usage.threads.header", defaultValue: "Heaviest threads", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(threadBasisFooter(ranking.basis))
         }
@@ -1360,7 +1360,7 @@ struct UsageDashboardContent: View {
                 defaultValue: """
                     Ranked by the total tokens your gateway reported. Threads it \
                     reported no total for aren't ranked here.
-                    """)
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .calculatedComponents:
             return LocalizedStringResource(
                 "settings.usage.threads.footer.components",
@@ -1368,7 +1368,7 @@ struct UsageDashboardContent: View {
                     Ranked by input plus output tokens, added up from what your \
                     gateway reported — it reported no totals of its own. Threads \
                     reporting neither aren't ranked here.
-                    """)
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -1432,7 +1432,7 @@ struct UsageDashboardContent: View {
             if !isLive {
                 Text(LocalizedStringResource(
                     "settings.usage.threads.unavailable",
-                    defaultValue: "Conversation unavailable"))
+                    defaultValue: "Conversation unavailable", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
             }
@@ -1444,13 +1444,13 @@ struct UsageDashboardContent: View {
     /// is not. Dates only — a time of day is a fact about when someone was at
     /// their desk.
     private func threadDateSpan(_ thread: ThreadUsage) -> String {
-        let start = thread.earliestStart.formatted(date: .abbreviated, time: .omitted)
+        let start = thread.earliestStart.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: AppLocalization.locale))
         if Calendar.current.isDate(thread.earliestStart, inSameDayAs: thread.latestStart) {
             return start
         }
-        let end = thread.latestStart.formatted(date: .abbreviated, time: .omitted)
+        let end = thread.latestStart.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: AppLocalization.locale))
         return String(localized: "settings.usage.threads.span",
-                      defaultValue: "\(start) – \(end)")
+                      defaultValue: "\(start) – \(end)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Every gateway the thread actually sent through, resolved at render time.
@@ -1473,11 +1473,11 @@ struct UsageDashboardContent: View {
         ]
         if let images = thread.inlineImageCount, images > 0 {
             parts.append(String(localized: "settings.usage.threads.images",
-                                defaultValue: "\(images) images"))
+                                defaultValue: "\(images) images", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         if let files = thread.inlineTextFileCount, files > 0 {
             parts.append(String(localized: "settings.usage.threads.files",
-                                defaultValue: "\(files) files"))
+                                defaultValue: "\(files) files", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         if let coverage = threadCoverageCaption(thread) {
             parts.append(coverage)
@@ -1495,10 +1495,10 @@ struct UsageDashboardContent: View {
         switch basis {
         case .reportedTotals:
             return String(localized: "settings.usage.threads.tokens.reported",
-                          defaultValue: "\(tokens.formatted(.number)) tokens")
+                          defaultValue: "\(tokens.formatted(.number.locale(AppLocalization.locale))) tokens", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .calculatedComponents:
             return String(localized: "settings.usage.threads.tokens.components",
-                          defaultValue: "\(tokens.formatted(.number)) tokens (input + output)")
+                          defaultValue: "\(tokens.formatted(.number.locale(AppLocalization.locale))) tokens (input + output)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -1513,7 +1513,7 @@ struct UsageDashboardContent: View {
                 defaultValue: """
                     Tokens reported on \(thread.tokenReportedTurns) of \
                     \(thread.turns) turns
-                    """))
+                    """, bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         let hasAttachmentCounts =
             thread.inlineImageCount != nil || thread.inlineTextFileCount != nil
@@ -1523,7 +1523,7 @@ struct UsageDashboardContent: View {
                 defaultValue: """
                     Attachments counted on \(thread.attachmentMeasuredAttempts) of \
                     \(thread.attempts) attempts
-                    """))
+                    """, bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
@@ -1535,14 +1535,14 @@ struct UsageDashboardContent: View {
             if let measurementStart = model.measurementStart {
                 valueRow(
                     label: LocalizedStringResource(
-                        "settings.usage.coverage.measuring", defaultValue: "Measuring since"),
-                    value: measurementStart.formatted(date: .abbreviated, time: .omitted),
+                        "settings.usage.coverage.measuring", defaultValue: "Measuring since", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
+                    value: measurementStart.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: AppLocalization.locale)),
                     caption: nil
                 )
             } else {
                 Text(LocalizedStringResource(
                     "settings.usage.coverage.notYet",
-                    defaultValue: "Measurement starts with your next conversation."))
+                    defaultValue: "Measurement starts with your next conversation.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .settingsCardPassiveRow()
@@ -1577,7 +1577,7 @@ struct UsageDashboardContent: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.coverage.header", defaultValue: "Coverage"))
+                "settings.usage.coverage.header", defaultValue: "Coverage", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             // ONE honest sentence about what these totals cover. Usage records
             // outlive the conversations they describe, so a footer promising the
@@ -1593,7 +1593,7 @@ struct UsageDashboardContent: View {
                     These totals include conversations you have since deleted — \
                     the records are content-free and stay until you clear usage \
                     history.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -1606,7 +1606,7 @@ struct UsageDashboardContent: View {
         } label: {
             Label(
                 LocalizedStringResource(
-                    "settings.usage.clear.action", defaultValue: "Clear usage history"),
+                    "settings.usage.clear.action", defaultValue: "Clear usage history", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "trash"
             )
             .font(.subheadline)
@@ -1615,20 +1615,20 @@ struct UsageDashboardContent: View {
         .foregroundStyle(AppColors.error)
         .confirmationDialog(
             LocalizedStringResource(
-                "settings.usage.clear.title", defaultValue: "Clear usage history?"),
+                "settings.usage.clear.title", defaultValue: "Clear usage history?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: $showingClearConfirmation,
             titleVisibility: .visible
         ) {
             Button(
                 LocalizedStringResource(
-                    "settings.usage.clear.action", defaultValue: "Clear usage history"),
+                    "settings.usage.clear.action", defaultValue: "Clear usage history", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .destructive
             ) {
                 Task { await model.clearUsageHistory() }
             }
             Button(
                 LocalizedStringResource(
-                    "settings.usage.clear.cancel", defaultValue: "Cancel"),
+                    "settings.usage.clear.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) { }
         } message: {
@@ -1638,7 +1638,7 @@ struct UsageDashboardContent: View {
                     This removes every usage record from this device and all your \
                     other devices, even when content sync is off. Your conversations \
                     are not affected. This cannot be undone.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -1650,7 +1650,7 @@ struct UsageDashboardContent: View {
             ProgressView()
                 .controlSize(.small)
             Text(LocalizedStringResource(
-                "settings.usage.clear.progress", defaultValue: "Clearing usage history…"))
+                "settings.usage.clear.progress", defaultValue: "Clearing usage history…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
         }
@@ -1725,7 +1725,7 @@ struct UsageDashboardContent: View {
     /// different kinds of absence.
     private var unattributedLabel: String {
         String(localized: "settings.usage.gateway.unattributed",
-               defaultValue: "Not recorded")
+               defaultValue: "Not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Side by side at normal text sizes, stacked at accessibility sizes. An
@@ -1809,7 +1809,7 @@ struct UsageDashboardContent: View {
             Text(label)
                 .foregroundStyle(AppColors.textPrimary)
             Spacer(minLength: 12)
-            Text(count.formatted(.number))
+            Text(count.formatted(.number.locale(AppLocalization.locale)))
                 .monospacedDigit()
                 .foregroundStyle(AppColors.textSecondary)
         }
@@ -1854,12 +1854,12 @@ struct UsageDashboardContent: View {
     /// which is a different claim from "none succeeded".
     private func percentText(_ value: Double?) -> String {
         guard let value else { return unavailable }
-        return value.formatted(.percent.precision(.fractionLength(0)))
+        return value.formatted(.percent.precision(.fractionLength(0)).locale(AppLocalization.locale))
     }
 
     private func decimalText(_ value: Double?) -> String {
         guard let value else { return unavailable }
-        return value.formatted(.number.precision(.fractionLength(1)))
+        return value.formatted(.number.precision(.fractionLength(1)).locale(AppLocalization.locale))
     }
 
     private func durationText(_ seconds: TimeInterval?) -> String {
@@ -1869,15 +1869,15 @@ struct UsageDashboardContent: View {
         if seconds < 60 {
             return Duration.seconds(seconds).formatted(
                 .units(allowed: [.seconds], width: .narrow, fractionalPart: .show(length: 1))
-            )
+            .locale(AppLocalization.locale))
         }
         return Duration.seconds(seconds).formatted(
             .units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2)
-        )
+        .locale(AppLocalization.locale))
     }
 
     private var unavailable: String {
-        String(localized: "settings.usage.unavailable", defaultValue: "—")
+        String(localized: "settings.usage.unavailable", defaultValue: "—", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Two keys rather than one plural rule: the headless build path that
@@ -1886,9 +1886,9 @@ struct UsageDashboardContent: View {
     /// Two flat keys stay correct with no post-processing.
     private func attemptsText(_ count: Int) -> String {
         count == 1
-            ? String(localized: "settings.usage.attempts.one", defaultValue: "1 attempt")
+            ? String(localized: "settings.usage.attempts.one", defaultValue: "1 attempt", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : String(localized: "settings.usage.attempts.other",
-                     defaultValue: "\(count) attempts")
+                     defaultValue: "\(count) attempts", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Two keys rather than one plural rule, for the same reason
@@ -1901,9 +1901,9 @@ struct UsageDashboardContent: View {
     /// wider population than the number was taken from.
     private func repliesText(_ count: Int) -> String {
         count == 1
-            ? String(localized: "settings.usage.replies.one", defaultValue: "1 reply")
+            ? String(localized: "settings.usage.replies.one", defaultValue: "1 reply", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : String(localized: "settings.usage.replies.other",
-                     defaultValue: "\(count) replies")
+                     defaultValue: "\(count) replies", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The sample size and the window, always together and always visible: an
@@ -1912,23 +1912,23 @@ struct UsageDashboardContent: View {
     /// notation, and nothing else on this screen asks the reader to know any.
     private func sampleCaption(count: Int) -> String {
         String(localized: "settings.usage.response.sampleCaption.plain",
-               defaultValue: "\(repliesText(count)) measured · \(rangeCaption)")
+               defaultValue: "\(repliesText(count)) measured · \(rangeCaption)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     private var rangeCaption: String {
         switch model.displayedRange {
         case .week:
             return String(localized: "settings.usage.rangeCaption.week",
-                          defaultValue: "last \(UsageDashboardModel.Range.weekDays) days")
+                          defaultValue: "last \(UsageDashboardModel.Range.weekDays) days", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .month:
             return String(localized: "settings.usage.rangeCaption.month",
-                          defaultValue: "last \(UsageDashboardModel.Range.monthDays) days")
+                          defaultValue: "last \(UsageDashboardModel.Range.monthDays) days", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .quarter:
             return String(localized: "settings.usage.rangeCaption.quarter",
-                          defaultValue: "last \(UsageDashboardModel.Range.quarterDays) days")
+                          defaultValue: "last \(UsageDashboardModel.Range.quarterDays) days", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .all:
             return String(localized: "settings.usage.rangeCaption.all",
-                          defaultValue: "all time")
+                          defaultValue: "all time", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 

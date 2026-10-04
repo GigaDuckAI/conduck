@@ -191,7 +191,8 @@ actor ShareTargetsSnapshotWriter {
             defaultGatewayRef: Self.publishedDefaultRef(
                 stored: storedDefault,
                 configured: configuredRefs
-            )
+            ),
+            appLanguage: await settings.getAppLanguage().rawValue
         )
     }
 

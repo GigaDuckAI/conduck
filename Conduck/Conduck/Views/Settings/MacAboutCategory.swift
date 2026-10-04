@@ -53,7 +53,7 @@ struct MacAboutCategory: View {
                                 showingLicenses = false
                             } label: {
                                 Text(LocalizedStringResource("settings.mac.done",
-                                                             defaultValue: "Done"))
+                                                             defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             }
                         }
                     }
@@ -74,7 +74,7 @@ struct MacAboutCategory: View {
             AppIdentityHeader()
                 .settingsCardPassiveRow()
         } header: {
-            Text(LocalizedStringResource("settings.mac.about.title", defaultValue: "About"))
+            Text(LocalizedStringResource("settings.mac.about.title", defaultValue: "About", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 

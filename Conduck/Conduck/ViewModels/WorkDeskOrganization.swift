@@ -433,6 +433,6 @@ final class WorkDeskOrganization {
         errorMessage = (error as? WorkDeskStoreError)?.localizedDescription ?? String(
             localized: "workdesk.error.save",
             defaultValue: "The desk couldn’t save that change. Try again."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 }

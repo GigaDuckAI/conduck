@@ -51,7 +51,7 @@ struct CustomGatewayHelpSheet: View {
             .navigationTitle(Text(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.title",
                 defaultValue: "What do I enter?"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -60,7 +60,7 @@ struct CustomGatewayHelpSheet: View {
                     Button(LocalizedStringResource(
                         "settings.remoteAgent.customHelp.done",
                         defaultValue: "Done"
-                    )) {
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         dismiss()
                     }
                 }
@@ -74,7 +74,7 @@ struct CustomGatewayHelpSheet: View {
         Text(LocalizedStringResource(
             "settings.remoteAgent.customHelp.intro",
             defaultValue: "Both values describe your own server. Pick the situation that matches yours."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         .font(.subheadline)
         .foregroundStyle(AppColors.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -92,12 +92,12 @@ struct CustomGatewayHelpSheet: View {
                 title: LocalizedStringResource(
                     "settings.remoteAgent.customHelp.api.header",
                     defaultValue: "I already run an OpenAI-compatible server"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
             Text(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.api.examples",
                 defaultValue: "LiteLLM, Ollama, vLLM, LM Studio — or an adapter you built."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.footnote)
             .foregroundStyle(AppColors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -105,11 +105,11 @@ struct CustomGatewayHelpSheet: View {
             subLabel(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.api.url.label",
                 defaultValue: "Gateway URL"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             bodyText(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.api.url.body",
                 defaultValue: "The https:// address your server is reachable at from this device — a Tailscale name, a domain, or a LAN address. Paste just the base address; Conduck adds /v1/… itself."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             codeLine("https://my-server.tail1234.ts.net:8000")
             // The second sentence is the difference between a working setup and
             // a 403 nobody can read: a server that checks the `Host` header
@@ -133,21 +133,21 @@ struct CustomGatewayHelpSheet: View {
             bodyText(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.api.url.portNote.v2",
                 defaultValue: "A framework's own port (Ollama's 11434, for example) is usually a private, http-only door on the machine itself — Conduck needs the https address that door is published at. Some servers, Ollama among them, also check the Host header — the name a request says it is addressed to — and refuse anything still carrying the public name, so whatever publishes it may need to rewrite that to the local one."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
 
             subLabel(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.api.token.label",
                 defaultValue: "Bearer token"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             bodyText(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.api.token.body",
                 defaultValue: "Whatever password that address checks before answering — set in your framework's config, or by a proxy in front of it. If your server deliberately has no password on a private network, turn off “Requires a bearer token” instead."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
 
             Text(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.api.test.v2",
                 defaultValue: "The connection test checks that Conduck can reach this address, authenticate, and read its model list. To exercise the chat wire too, download the script on that machine with \(Constants.conduckConnectDownloadCommand) and run bash conduck-connect.sh --check-server. After a PASS, the interactive script can continue into setup."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.footnote)
             .foregroundStyle(AppColors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -169,21 +169,21 @@ struct CustomGatewayHelpSheet: View {
                 title: LocalizedStringResource(
                     "settings.remoteAgent.customHelp.adapter.header",
                     defaultValue: "My AI isn't a server yet"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
             bodyText(LocalizedStringResource(
                 "settings.remoteAgent.customHelp.adapter.body",
                 defaultValue: "If you built your own AI and it can't answer web requests yet, it needs a small front door — an adapter — that Conduck can knock on. The AI coding tool you built it with can write that adapter for you: copy the instructions and paste them into that tool."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
 
             Button(action: copyBrief) {
                 Label(
                     didCopy
-                        ? LocalizedStringResource("gateway.setupCommand.copied", defaultValue: "Copied")
+                        ? LocalizedStringResource("gateway.setupCommand.copied", defaultValue: "Copied", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                         : LocalizedStringResource(
                             "settings.remoteAgent.customHelp.adapter.copy",
                             defaultValue: "Copy adapter instructions"
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: didCopy ? "checkmark" : "doc.on.doc"
                 )
                 .font(.subheadline.weight(.semibold))
@@ -197,14 +197,14 @@ struct CustomGatewayHelpSheet: View {
                     LocalizedStringResource(
                         "settings.remoteAgent.customHelp.adapter.guide",
                         defaultValue: "See how it works"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     urlString: Constants.adapterBuildGuideURL
                 )
                 docLink(
                     LocalizedStringResource(
                         "settings.remoteAgent.customHelp.adapter.contract",
                         defaultValue: "Read the adapter contract"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     urlString: Constants.adapterContractURL
                 )
             }

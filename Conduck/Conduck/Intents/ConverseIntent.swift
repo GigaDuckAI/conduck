@@ -136,22 +136,22 @@ enum GigaActionDestination: String, AppEnum {
     case chat
     case work
 
-    static var typeDisplayRepresentation = TypeDisplayRepresentation(
+    static var typeDisplayRepresentation: TypeDisplayRepresentation { TypeDisplayRepresentation(
         name: LocalizedStringResource(
             "intent.converse.destination.type",
             defaultValue: "Destination"
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     static var caseDisplayRepresentations: [GigaActionDestination: DisplayRepresentation] = [
         .chat: DisplayRepresentation(title: LocalizedStringResource(
             "intent.converse.destination.chat",
             defaultValue: "Chat"
-        )),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
         .work: DisplayRepresentation(title: LocalizedStringResource(
             "intent.converse.destination.work",
             defaultValue: "Work"
-        )),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
     ]
 }
 
@@ -161,7 +161,7 @@ enum GigaActionDestination: String, AppEnum {
 /// or a destination that goes away mid-recording — still leaves the recording
 /// recoverable. The agent converse hop runs on the background URLSession.
 struct ConverseIntent: AppIntent {
-    static var title: LocalizedStringResource = "GigaAction"   // xcstrings
+    static var title: LocalizedStringResource { LocalizedStringResource("GigaAction", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }   // xcstrings
 
     /// Always-compiled, metadata-only logger. `RemoteAgentDiagnostics.log` is
     /// `#if DEBUG` and therefore unavailable to the one line below that has to
@@ -173,12 +173,12 @@ struct ConverseIntent: AppIntent {
         category: "ConverseIntent"
     )
 
-    static var description: IntentDescription = IntentDescription(
+    static var description: IntentDescription { IntentDescription(
         LocalizedStringResource(
             "intent.converse.description",
             defaultValue: "Transcribe recorded audio, then send it to Chat or save it in Work."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     // MARK: - Parameters
 
@@ -212,7 +212,7 @@ struct ConverseIntent: AppIntent {
         title: LocalizedStringResource(
             "intent.converse.destination",
             defaultValue: "Destination"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         default: .chat
     )
     var destination: GigaActionDestination
@@ -660,7 +660,7 @@ struct ConverseIntent: AppIntent {
                     throw AppError.invalidRequest(message: String(
                         localized: "pendingRetry.card.busy",
                         defaultValue: "This recording is already being finished. Try again in a moment."
-                    ))
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                 }
 
                 // PHASE 2, and the whole desk-side decision behind ONE call.
@@ -734,7 +734,7 @@ struct ConverseIntent: AppIntent {
                 throw AppError.invalidRequest(message: String(
                     localized: "pendingRetry.card.busy",
                     defaultValue: "This recording is already being finished. Try again in a moment."
-                ))
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             }
 
             try await Self.runConverseHop(

@@ -84,9 +84,9 @@ struct PendingRetryCard: View {
                 // card with no button never reads as one whose button is missing.
                 Text(errorIsRetryable
                      ? LocalizedStringResource("pendingRetry.headline",
-                                               defaultValue: "Your last recording couldn't be sent.")
+                                               defaultValue: "Your last recording couldn't be sent.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                      : LocalizedStringResource("pendingRetry.headline.terminal",
-                                               defaultValue: "Your last recording couldn't be sent, and trying again would reach the same answer."))
+                                               defaultValue: "Your last recording couldn't be sent, and trying again would reach the same answer.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
 
@@ -118,7 +118,7 @@ struct PendingRetryCard: View {
                 Text(String(
                     localized: "pendingRetry.card.count",
                     defaultValue: "\(pendingCount) recordings waiting"
-                ))
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -146,7 +146,7 @@ struct PendingRetryCard: View {
                     Text(String(
                         localized: "pendingRetry.card.discard",
                         defaultValue: "Discard recording"
-                    ))
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                     .font(.caption)
                 }
                 .buttonStyle(.plain)
@@ -161,7 +161,7 @@ struct PendingRetryCard: View {
             String(
                 localized: "pendingRetry.card.discard.confirm.title",
                 defaultValue: "Discard this recording?"
-            ),
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             isPresented: $confirmingDiscard,
             titleVisibility: .visible
         ) {
@@ -169,13 +169,13 @@ struct PendingRetryCard: View {
                 String(
                     localized: "pendingRetry.card.discard.confirm.action",
                     defaultValue: "Discard"
-                ),
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 role: .destructive
             ) {
                 onDiscardConfirmed()
             }
             Button(
-                String(localized: "common.cancel", defaultValue: "Cancel"),
+                String(localized: "common.cancel", defaultValue: "Cancel", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 role: .cancel
             ) {
                 onDiscardCancelled()
@@ -207,7 +207,7 @@ struct PendingRetryCard: View {
                     This deletes the recording from this device. It cannot be \
                     recovered.
                     """
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return String(
             localized: "pendingRetry.card.discard.confirm.body.published",
@@ -215,6 +215,6 @@ struct PendingRetryCard: View {
                 Your words are already on your desk. This removes only the \
                 leftover copy this device kept.
                 """
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 }

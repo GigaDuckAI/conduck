@@ -66,9 +66,9 @@ struct WatchMessageComposerBar: View {
     }
 
     private var trailingAccessibilityLabel: LocalizedStringResource {
-        if isRecording || isInFlight { return LocalizedStringResource("Stop") }
-        if hasDraft { return LocalizedStringResource("Send message") }
-        return LocalizedStringResource("Record voice message")
+        if isRecording || isInFlight { return LocalizedStringResource("Stop", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
+        if hasDraft { return LocalizedStringResource("Send message", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
+        return LocalizedStringResource("Record voice message", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// Compact shared height for both the field pill and the mic circle, so the
@@ -88,7 +88,7 @@ struct WatchMessageComposerBar: View {
             // matches the mic. Clipping the chrome (not adding a shape) sidesteps the
             // double-shape artifact entirely.
             TextField(
-                LocalizedStringResource("Message"),
+                LocalizedStringResource("Message", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 text: $draft
             )
             .font(.caption)

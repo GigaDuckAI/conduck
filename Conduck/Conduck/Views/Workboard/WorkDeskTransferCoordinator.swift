@@ -242,11 +242,11 @@ struct WorkDeskTransferOverlay: View {
                     }
                     if let destination = coordinator.destination, destination.location != drag.source {
                         Label {
-                            Text(LocalizedStringResource("workdesk.transfer.moveTo", defaultValue: "Move to \(destination.title)"))
+                            Text(LocalizedStringResource("workdesk.transfer.moveTo", defaultValue: "Move to \(destination.title)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         } icon: { Image(systemName: "arrow.turn.down.right") }
                         .font(.caption).foregroundStyle(AppColors.brandAmber)
                     } else {
-                        Text(LocalizedStringResource("workdesk.transfer.cancelHint", defaultValue: "Release here to cancel"))
+                        Text(LocalizedStringResource("workdesk.transfer.cancelHint", defaultValue: "Release here to cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption).foregroundStyle(AppColors.textSecondary)
                     }
                 }

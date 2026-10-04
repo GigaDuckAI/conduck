@@ -142,7 +142,7 @@ nonisolated struct GatewayActivationState: Sendable, Equatable {
     }
 
     static var inactiveMessage: String {
-        String(localized: "gateway.plan.inactive", defaultValue: "This gateway is inactive on your free plan. Choose active gateways in Personal AI settings, or renew Conduck Pro.")
+        String(localized: "gateway.plan.inactive", defaultValue: "This gateway is inactive on your free plan. Choose active gateways in Personal AI settings, or renew Conduck Pro.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     func permits(_ ref: RemoteAgentRef) -> Bool {

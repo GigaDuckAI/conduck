@@ -258,49 +258,49 @@ final class AppleSpeechTester {
         String(localized: LocalizedStringResource(
             "settings.voice.apple.test.error.speechDenied",
             defaultValue: "Speech Recognition is off. Turn it on in Settings → Privacy → Speech Recognition."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var micDeniedMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.apple.test.error.micDenied",
             defaultValue: "Microphone access is off. Turn it on in Settings → Privacy → Microphone."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var micBusyMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.apple.test.error.micBusy",
             defaultValue: "The microphone is busy. Stop other recording and try again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var micFailureMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.apple.test.error.micFailure",
             defaultValue: "Couldn't start recording. Try again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var noSpeechMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.apple.test.error.noSpeech",
             defaultValue: "No speech detected. Try again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var modelMissingMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.apple.test.error.modelMissing",
             defaultValue: "Setting up voice for this language — try again in a moment."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var languageUnsupportedMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.apple.test.error.languageUnsupported",
             defaultValue: "Apple Speech doesn't support this language yet."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var transcribeFailedMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.apple.test.error.transcribeFailed",
             defaultValue: "Couldn't transcribe that. Try again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 }
 

@@ -1048,7 +1048,7 @@ struct WatchConversationThreadView: View {
             .accessibilityHint(Text(String(localized: LocalizedStringResource(
                 "watch.thread.error.expandHint",
                 defaultValue: "Tap to show the full message"
-            ))))  // xcstrings: hardening
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))))  // xcstrings: hardening
             Button {
                 recordingService.dismissError()
                 // User abandonment is view-local knowledge — the service must
@@ -1067,7 +1067,7 @@ struct WatchConversationThreadView: View {
             .accessibilityLabel(Text(String(localized: LocalizedStringResource(
                 "watch.thread.error.dismiss",
                 defaultValue: "Dismiss error"
-            ))))  // xcstrings: hardening
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))))  // xcstrings: hardening
         }
         .padding(.horizontal, 8)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -1161,13 +1161,13 @@ struct WatchConversationThreadView: View {
                             Text(LocalizedStringResource(
                                 "thread.speak.fallbackVoice",
                                 defaultValue: "Built-in voice"
-                            ))  // xcstrings: new key
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings: new key
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                             .accessibilityLabel(Text(LocalizedStringResource(
                                 "thread.speak.fallbackVoice.a11y",
                                 defaultValue: "Spoken with the built-in voice"
-                            )))
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                         }
                         Spacer(minLength: 0)
                         speakControl(for: message)
@@ -1200,10 +1200,10 @@ struct WatchConversationThreadView: View {
     /// Localized untitled fallback for a text attachment with no filename —
     /// shared by the tappable row label, the oversized marker, and the viewer's
     /// navigation title.
-    private static let untitledFileResource = LocalizedStringResource(
+    private static var untitledFileResource: LocalizedStringResource { LocalizedStringResource(
         "watch.attachment.untitled",
         defaultValue: "Attached file"
-    )  // xcstrings
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }  // xcstrings
 
     /// Render one attachment per its `WatchDisplayClass`. Server references +
     /// not-yet-synced rows collapse to the same passive "[File attached]" caption
@@ -1238,7 +1238,7 @@ struct WatchConversationThreadView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
         } else {
-            Text(LocalizedStringResource("[Image attached]"))  // xcstrings
+            Text(LocalizedStringResource("[Image attached]", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
                 .font(.caption2)
                 .foregroundStyle(isUser ? .white.opacity(0.85) : .secondary)
                 .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
@@ -1277,7 +1277,7 @@ struct WatchConversationThreadView: View {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "watch.attachment.view.a11y",
                 defaultValue: "View attached file \(name)"
-            )))  // xcstrings
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))  // xcstrings
         } else {
             fileMarker(isUser: isUser)
         }
@@ -1295,7 +1295,7 @@ struct WatchConversationThreadView: View {
             Text(LocalizedStringResource(
                 "watch.attachment.oversized",
                 defaultValue: "Too large to view on Apple Watch"
-            ))  // xcstrings
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
             .foregroundStyle(.tertiary)
         }
         .font(.caption2)
@@ -1303,14 +1303,6 @@ struct WatchConversationThreadView: View {
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
     }
 
-    /// `.file`-style byte formatter for the server marker ("1.2 MB"). Static:
-    /// `ByteCountFormatter` allocation isn't free and the row builder runs on
-    /// every body pass (speak-state flips, AOD swaps, composer toggles).
-    private static let fileSizeFormatter: ByteCountFormatter = {
-        let f = ByteCountFormatter()
-        f.countStyle = .file
-        return f
-    }()
 
     /// Informative passive marker for a server-reference file the wrist can't
     /// download by design: the filename (untitled fallback) + a formatted size
@@ -1324,13 +1316,13 @@ struct WatchConversationThreadView: View {
             Text(name)
                 .lineLimit(1)
             if attachment.byteSize > 0 {
-                Text(Self.fileSizeFormatter.string(fromByteCount: Int64(attachment.byteSize)))
+                Text(AppLocalization.byteCount( Int64(attachment.byteSize)))
                     .foregroundStyle(.tertiary)
             }
             Text(LocalizedStringResource(
                 "watch.attachment.location",
                 defaultValue: "On your iPhone, iPad or Mac"
-            ))  // xcstrings
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
             .foregroundStyle(.tertiary)
         }
         .font(.caption2)
@@ -1342,7 +1334,7 @@ struct WatchConversationThreadView: View {
     /// `extractedText`, content still arriving via CloudKit).
     @ViewBuilder
     private func fileMarker(isUser: Bool) -> some View {
-        Text(LocalizedStringResource("[File attached]"))  // xcstrings
+        Text(LocalizedStringResource("[File attached]", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
             .font(.caption2)
             .foregroundStyle(isUser ? .white.opacity(0.85) : .secondary)
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
@@ -1397,10 +1389,10 @@ struct WatchConversationThreadView: View {
     /// mirrors the iPhone control's labels.
     private func speakAccessibilityLabel(for state: SpeakState) -> LocalizedStringResource {
         switch state {
-        case .idle: return LocalizedStringResource("Read aloud")  // xcstrings (existing key)
-        case .loading: return LocalizedStringResource("Loading")  // xcstrings
-        case .playing: return LocalizedStringResource("Pause")  // xcstrings
-        case .paused: return LocalizedStringResource("Resume")  // xcstrings
+        case .idle: return LocalizedStringResource("Read aloud", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)  // xcstrings (existing key)
+        case .loading: return LocalizedStringResource("Loading", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)  // xcstrings
+        case .playing: return LocalizedStringResource("Pause", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)  // xcstrings
+        case .paused: return LocalizedStringResource("Resume", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)  // xcstrings
         }
     }
 

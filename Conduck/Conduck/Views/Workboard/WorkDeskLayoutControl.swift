@@ -53,7 +53,7 @@ struct WorkDeskLayoutControl: View {
                             || (mode == .desk && !supportsSpatialLayout)))
                 }
             } label: {
-                Text(LocalizedStringResource("workboard.layout.label", defaultValue: "Board view"))
+                Text(LocalizedStringResource("workboard.layout.label", defaultValue: "Board view", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             .pickerStyle(.inline)
         } label: {
@@ -69,7 +69,7 @@ struct WorkDeskLayoutControl: View {
         }
         .pointerIconButton(size: 44)
         .disabled(!isActive)
-        .accessibilityLabel(Text(LocalizedStringResource("workboard.layout.label", defaultValue: "Board view")))
+        .accessibilityLabel(Text(LocalizedStringResource("workboard.layout.label", defaultValue: "Board view", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .accessibilityValue(Text(renderedMode.title))
         .accessibilityIdentifier("workdesk-layout-control")
     }

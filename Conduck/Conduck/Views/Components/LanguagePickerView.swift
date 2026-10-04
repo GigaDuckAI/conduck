@@ -97,7 +97,7 @@ struct LanguagePickerView: View {
         } label: {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(language.name)
+                    Text(AppLocalization.locale.localizedString(forLanguageCode: language.code) ?? language.name)
                         .font(.body)
                         .foregroundStyle(.primary)
 
@@ -127,7 +127,8 @@ struct LanguagePickerView: View {
         }
 
         return LanguageList.allLanguages.filter { language in
-            language.name.localizedCaseInsensitiveContains(searchText) ||
+            (AppLocalization.locale.localizedString(forLanguageCode: language.code) ?? language.name).localizedCaseInsensitiveContains(searchText)
+                || language.name.localizedCaseInsensitiveContains(searchText) ||
             language.nativeName.localizedCaseInsensitiveContains(searchText) ||
             language.code.localizedCaseInsensitiveContains(searchText)
         }

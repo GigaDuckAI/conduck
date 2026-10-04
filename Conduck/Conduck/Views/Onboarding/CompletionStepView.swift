@@ -47,7 +47,7 @@ struct CompletionStepView: View {
             Text(LocalizedStringResource(
                 "onboarding.completion.subtitle",
                 defaultValue: "Just connect your AI and you can start talking."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.callout)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)

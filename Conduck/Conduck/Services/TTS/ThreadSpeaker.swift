@@ -173,7 +173,7 @@ final class ThreadSpeaker {
                 deactivatePlaybackSessionIfNeeded()
                 #endif
                 AccessibilityAnnouncer.announce(LocalizedStringResource(
-                    "thread.speak.announce.paused", defaultValue: "Paused"))
+                    "thread.speak.announce.paused", defaultValue: "Paused", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 return
             case .paused:
                 // Resume from the paused position — no re-fetch, no restart.
@@ -194,7 +194,7 @@ final class ThreadSpeaker {
                 state = .playing
                 engine.resume()
                 AccessibilityAnnouncer.announce(LocalizedStringResource(
-                    "thread.speak.announce.reading", defaultValue: "Reading reply"))
+                    "thread.speak.announce.reading", defaultValue: "Reading reply", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 return
             case .loading:
                 // Still fetching — nothing is playing, so a re-tap cancels.
@@ -243,7 +243,7 @@ final class ThreadSpeaker {
                     self.clearSystemPauseMark()
                     self.state = .playing
                     AccessibilityAnnouncer.announce(LocalizedStringResource(
-                        "thread.speak.announce.reading", defaultValue: "Reading reply"))
+                        "thread.speak.announce.reading", defaultValue: "Reading reply", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 case .fallbackStarted:
                     // The Apple FALLBACK leg's audio actually began for a turn
                     // whose intended engine was a cloud voice — mark the bubble
@@ -285,7 +285,7 @@ final class ThreadSpeaker {
         deactivatePlaybackSessionIfNeeded()
         #endif
         AccessibilityAnnouncer.announce(LocalizedStringResource(
-            "thread.speak.announce.stopped", defaultValue: "Stopped"))
+            "thread.speak.announce.stopped", defaultValue: "Stopped", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     // MARK: - Watch dim-cut reconciliation

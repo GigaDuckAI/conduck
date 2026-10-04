@@ -46,20 +46,20 @@ enum WorkboardMaterialKind: String, CaseIterable, Codable, Hashable, Sendable {
     var title: LocalizedStringResource {
         switch self {
         case .image:
-            return LocalizedStringResource("workboard.material.image", defaultValue: "Image")
+            return LocalizedStringResource("workboard.material.image", defaultValue: "Image", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .file:
-            return LocalizedStringResource("workboard.material.file", defaultValue: "File")
+            return LocalizedStringResource("workboard.material.file", defaultValue: "File", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .link:
-            return LocalizedStringResource("workboard.material.link", defaultValue: "Link")
+            return LocalizedStringResource("workboard.material.link", defaultValue: "Link", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .note:
-            return LocalizedStringResource("workboard.material.note", defaultValue: "Note")
+            return LocalizedStringResource("workboard.material.note", defaultValue: "Note", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .audio:
-            return LocalizedStringResource("workboard.material.audio", defaultValue: "Voice note")
+            return LocalizedStringResource("workboard.material.audio", defaultValue: "Voice note", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .transcript:
             return LocalizedStringResource(
                 "workboard.material.transcript",
                 defaultValue: "Spoken note"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -351,7 +351,7 @@ enum WorkboardVoiceTarget: String, Identifiable, Hashable, Sendable {
             return LocalizedStringResource(
                 "workboard.voice.context",
                 defaultValue: "Record a voice note"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }
@@ -606,7 +606,7 @@ enum WorkboardWorkspaceCaptureLogic {
             ? String(localized: LocalizedStringResource(
                 "workboard.workspace.thought.defaultTitle",
                 defaultValue: "Thought"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             : title
     }
 }
@@ -994,13 +994,13 @@ final class WorkboardViewModel {
             kind: .information,
             title: LocalizedStringResource(
                 "workdesk.capture.project.failed.title", defaultValue: "Saved on Home"
-            ),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             message: report.hasFailures
                 ? String.localizedStringWithFormat(
                     String(localized: LocalizedStringResource(
                         "workdesk.capture.project.atomic.partial.message",
                         defaultValue: "%1$lld added; %2$lld couldn’t be added. Some saved items couldn’t be placed in the project. Open Home to organise them."
-                    )), Int64(report.addedCount), Int64(report.failedCount)
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), Int64(report.addedCount), Int64(report.failedCount)
                 )
                 : WorkVoiceCaptureCoordinator.savedInAllMaterialsMessage
         )
@@ -1014,13 +1014,13 @@ final class WorkboardViewModel {
                 message = String(localized: LocalizedStringResource(
                     "workboard.workspace.import.complete.message.one",
                     defaultValue: "One item was added. Nothing was sent."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } else {
                 message = String.localizedStringWithFormat(
                     String(localized: LocalizedStringResource(
                         "workboard.workspace.import.complete.message",
                         defaultValue: "%lld items were added. Nothing was sent."
-                    )),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     Int64(report.addedCount)
                 )
             }
@@ -1032,12 +1032,12 @@ final class WorkboardViewModel {
                 title: LocalizedStringResource(
                     "workboard.workspace.import.partial.title",
                     defaultValue: "Some items need another try"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 message: String.localizedStringWithFormat(
                     String(localized: LocalizedStringResource(
                         "workboard.workspace.import.partial.message",
                         defaultValue: "%1$lld added, %2$lld failed. Added items were kept and nothing was sent."
-                    )),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     Int64(report.addedCount),
                     Int64(report.failedCount)
                 )
@@ -1051,7 +1051,7 @@ final class WorkboardViewModel {
             title: LocalizedStringResource(
                 "workboard.workspace.capture.failed.title",
                 defaultValue: "Couldn’t add to Work"
-            ),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             message: error.localizedDescription
         )
     }
@@ -1195,7 +1195,7 @@ final class WorkboardViewModel {
                 title: LocalizedStringResource(
                     "workboard.material.remove.failed.title",
                     defaultValue: "Couldn’t remove material"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 message: error.localizedDescription
             )
             return false
@@ -1237,7 +1237,7 @@ final class WorkboardViewModel {
                 title: LocalizedStringResource(
                     "workboard.material.remove.failed.title",
                     defaultValue: "Couldn’t remove material"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 message: error.localizedDescription
             )
             return false
@@ -1309,7 +1309,7 @@ final class WorkboardViewModel {
             let message = String(localized: LocalizedStringResource(
                 "workboard.reorder.conflict",
                 defaultValue: "The desk changed while this move was saving, so the board kept its own order."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             workspaceStatus = WorkboardTransientStatus(message: message, kind: .conflict)
             AccessibilityAnnouncer.announce(message)
             return
@@ -1319,7 +1319,7 @@ final class WorkboardViewModel {
             title: LocalizedStringResource(
                 "workboard.action.failed.title",
                 defaultValue: "Couldn’t update the board"
-            ),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             message: error.localizedDescription
         )
     }

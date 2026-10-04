@@ -84,7 +84,7 @@ struct DiagnosticCheckRow: View {
         if let override = detailOverride { return override }
         if let detail = check.detail { return detail }
         if check.status == .notRun {
-            return String(localized: "diagnostics.check.notTested", defaultValue: "Not tested")
+            return String(localized: "diagnostics.check.notTested", defaultValue: "Not tested", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         if case let .failed(code) = check.status, let code {
             return DiagnosticsExplainer.explain(code: code).fix

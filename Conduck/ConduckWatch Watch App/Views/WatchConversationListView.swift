@@ -211,7 +211,7 @@ struct WatchConversationListView: View {
             Text(LocalizedStringResource(
                 "watch.conversations.empty.hint",
                 defaultValue: "Ask your AI to start one."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -367,9 +367,9 @@ struct WatchConversationListView: View {
     /// alone when the title projects away to nothing.
     static func projectAccessibilityLabel(_ projectName: String?) -> LocalizedStringResource {
         if let projectName {
-            return LocalizedStringResource("watch.row.a11y.inProject", defaultValue: "In project \(projectName)")  // xcstrings
+            return LocalizedStringResource("watch.row.a11y.inProject", defaultValue: "In project \(projectName)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)  // xcstrings
         }
-        return LocalizedStringResource("watch.row.a11y.inUnnamedProject", defaultValue: "In a project")  // xcstrings
+        return LocalizedStringResource("watch.row.a11y.inUnnamedProject", defaultValue: "In a project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)  // xcstrings
     }
 
     /// Whether the date slot carries the project in this state — the wrist's
@@ -448,9 +448,10 @@ struct WatchConversationListView: View {
         conversation.displayTitle
     }
 
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
+    private static var relativeFormatter: RelativeDateTimeFormatter {
         let f = RelativeDateTimeFormatter()
+        f.locale = AppLocalization.locale
         f.unitsStyle = .abbreviated
         return f
-    }()
+    }
 }

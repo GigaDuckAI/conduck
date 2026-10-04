@@ -461,7 +461,7 @@ struct MessageComposerBar: View {
         // cancel-in-setter would discard the file the user just confirmed.
         // Cancellation is ONLY the cancel-role button (which also covers Esc).
         .alert(
-            LocalizedStringResource("fileTransfer.softConfirm.title", defaultValue: "Attach large file?"),
+            LocalizedStringResource("fileTransfer.softConfirm.title", defaultValue: "Attach large file?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: Binding(
                 get: {
                     workbenchDestinationIsActive && pendingLargeFiles.first != nil
@@ -470,10 +470,10 @@ struct MessageComposerBar: View {
             ),
             presenting: pendingLargeFiles.first
         ) { file in
-            Button(LocalizedStringResource("fileTransfer.softConfirm.attach", defaultValue: "Attach")) {
+            Button(LocalizedStringResource("fileTransfer.softConfirm.attach", defaultValue: "Attach", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 confirmPendingLargeFile()
             }
-            Button(LocalizedStringResource("fileTransfer.softConfirm.cancel", defaultValue: "Cancel"), role: .cancel) {
+            Button(LocalizedStringResource("fileTransfer.softConfirm.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) {
                 cancelPendingLargeFile()
             }
         } message: { file in
@@ -481,7 +481,7 @@ struct MessageComposerBar: View {
                 format: String(localized: LocalizedStringResource(
                     "fileTransfer.softConfirm.message",
                     defaultValue: "%1$@ is %2$@ in size. Large files can take a while to upload."
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 file.originalName,
                 AttachmentChipStyle.formattedSize(file.byteSize)
             ))
@@ -613,7 +613,7 @@ struct MessageComposerBar: View {
     private var errorBanner: some View {
         if case .error(let appError) = recorder.state {
             let message = appError.descriptionWithRecovery(for: selectedRef)
-            Text(message.isEmpty ? String(localized: "Something went wrong.") : message)  // xcstrings
+            Text(message.isEmpty ? String(localized: "Something went wrong.", bundle: AppLocalization.bundle, locale: AppLocalization.locale) : message)  // xcstrings
                 .font(.caption)
                 .foregroundStyle(AppColors.error)
                 .multilineTextAlignment(.center)
@@ -669,7 +669,7 @@ struct MessageComposerBar: View {
                 String(localized: LocalizedStringResource(
                     "composer.placeholder.v2",
                     defaultValue: "Message your AI"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 text: $draft,
                 axis: .vertical
             )
@@ -943,8 +943,8 @@ struct MessageComposerBar: View {
                 || isPreparingVoice
                 || (viewModel?.isAwaitingReply ?? false),
             accessibilityLabel: isRecording
-                ? String(localized: LocalizedStringResource("composer.mic.stop", defaultValue: "Stop recording"))
-                : String(localized: LocalizedStringResource("composer.mic.start", defaultValue: "Start recording")),
+                ? String(localized: LocalizedStringResource("composer.mic.stop", defaultValue: "Stop recording", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
+                : String(localized: LocalizedStringResource("composer.mic.start", defaultValue: "Start recording", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: toggleMic
         )
     }
@@ -971,7 +971,7 @@ struct MessageComposerBar: View {
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.recordingStarted",
                 defaultValue: "Recording started"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             Task {
                 // On-device default is keyboard dictation — no model download,
                 // no proactive gate. A rare model-unavailable case surfaces
@@ -982,7 +982,7 @@ struct MessageComposerBar: View {
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.transcribing",
                 defaultValue: "Transcribing"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             Task {
                 let result = await recorder.stopAndUpload()
                 await onVoiceResult(result)
@@ -1033,8 +1033,8 @@ struct MessageComposerBar: View {
             // loading / mid-capture.
             isDisabled: isInFlight ? false : (!hasSendableContent || isSendDisabled),
             accessibilityLabel: isInFlight
-                ? String(localized: "Stop")  // xcstrings: chat-ui
-                : String(localized: LocalizedStringResource("composer.send", defaultValue: "Send")),
+                ? String(localized: "Stop", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
+                : String(localized: LocalizedStringResource("composer.send", defaultValue: "Send", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: { trailingAction(intent) }
         )
     }

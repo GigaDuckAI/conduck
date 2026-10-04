@@ -366,7 +366,7 @@ struct LeadingToolbarChrome: ToolbarContent {
             .help(String(localized: LocalizedStringResource(
                 "conversations.newConversation.help",
                 defaultValue: "New conversation (⌘N)"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
 
         #if os(macOS)

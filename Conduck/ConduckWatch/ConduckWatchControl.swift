@@ -19,10 +19,10 @@ struct RecordNoteControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: Self.kind) {
             ControlWidgetButton(action: RecordNoteIntent()) {
-                Label("GigaAction", systemImage: "waveform")  // xcstrings
+                Label { Text(LocalizedStringResource("GigaAction", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) } icon: { Image(systemName: "waveform") }  // xcstrings
             }
         }
-        .displayName("GigaAction")  // xcstrings
-        .description("Capture a voice transcription with Conduck")  // xcstrings
+        .displayName(LocalizedStringResource("GigaAction", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
+        .description(LocalizedStringResource("Capture a voice transcription with Conduck", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
     }
 }

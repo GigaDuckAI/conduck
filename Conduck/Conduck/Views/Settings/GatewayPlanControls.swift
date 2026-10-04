@@ -28,7 +28,7 @@ struct GatewayPlanControls: View {
         // gateway's editor also offers this link to revise a completed choice.
         if viewModel.showsGatewaySelection
             && (!onlyWhenSelectionRequired || viewModel.gatewayActivation.requiresSelection) {
-            Button(LocalizedStringResource("gateway.plan.choose.action", defaultValue: "Choose active gateways")) {
+            Button(LocalizedStringResource("gateway.plan.choose.action", defaultValue: "Choose active gateways", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 flow.showingSelection = true
             }
             .font(.callout)
@@ -94,9 +94,9 @@ struct GatewayActivationPicker: View {
         NavigationStack {
             Form {
                 Section {
-                    Text(LocalizedStringResource("gateway.plan.choose.message", defaultValue: "Choose up to three active gateways for your free plan. Your other configurations and conversations stay saved."))
+                    Text(LocalizedStringResource("gateway.plan.choose.message", defaultValue: "Choose up to three active gateways for your free plan. Your other configurations and conversations stay saved.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .foregroundStyle(AppColors.textSecondary)
-                    Text(LocalizedStringResource("gateway.plan.choose.openrouter", defaultValue: "OpenRouter is always available and does not count toward this selection."))
+                    Text(LocalizedStringResource("gateway.plan.choose.openrouter", defaultValue: "OpenRouter is always available and does not count toward this selection.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption).foregroundStyle(AppColors.textSecondary)
                 }
                 Section {
@@ -114,20 +114,20 @@ struct GatewayActivationPicker: View {
                 if let error { Text(verbatim: error).foregroundStyle(.red) }
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(Text(LocalizedStringResource("gateway.plan.choose.action", defaultValue: "Choose active gateways")))
+            .navigationTitle(Text(LocalizedStringResource("gateway.plan.choose.action", defaultValue: "Choose active gateways", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) { dismiss() }
+                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringResource("common.save", defaultValue: "Save")) {
+                    Button(LocalizedStringResource("common.save", defaultValue: "Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         saving = true
                         Task {
                             let saved = await viewModel.chooseActiveGateways(selected)
                             saving = false
                             if saved { dismiss() }
                             else {
-                                error = String(localized: "gateway.plan.choose.changed", defaultValue: "Your gateways changed. Choose up to three saved gateways and try again.")
+                                error = String(localized: "gateway.plan.choose.changed", defaultValue: "Your gateways changed. Choose up to three saved gateways and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                                 selected.formIntersection(viewModel.gatewayAllowanceRefs)
                             }
                         }

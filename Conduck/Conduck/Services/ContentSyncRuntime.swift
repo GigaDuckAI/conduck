@@ -62,27 +62,27 @@ final class ContentSyncRuntime {
             statusMessage = LocalizedStringResource(
                 "sync.content.pendingOtherActivity",
                 defaultValue: "Waiting for another Conduck session to stop syncing."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .activeOperations:
             statusMessage = LocalizedStringResource(
                 "sync.content.pendingSave",
                 defaultValue: "Waiting for the current save to finish."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .storage:
             statusMessage = LocalizedStringResource(
                 "sync.content.changeFailed",
                 defaultValue: "The sync change could not finish. Your saved data is kept. Try again."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .unavailableInBuild:
             statusMessage = LocalizedStringResource(
                 "sync.content.unavailableInBuild",
                 defaultValue: "This build keeps content on this device because iCloud sync is unavailable."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .policyUnavailable:
             statusMessage = LocalizedStringResource(
                 "sync.content.policyUnavailable",
                 defaultValue: "Waiting to read the sync setting. Your saved data is kept."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case nil:
             statusMessage = nil
         }

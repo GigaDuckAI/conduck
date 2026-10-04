@@ -326,8 +326,7 @@ final class WorkboardCardFacePolicyTests: XCTestCase {
         let face = WorkboardCardFacePolicy.face(for: file)
         XCTAssertEqual(face.heading, "Q4 board pack final.pdf")
         XCTAssertTrue(face.headingProtectsExtension)
-        let size = ByteCountFormatter.string(fromByteCount: 2_400_000, countStyle: .file)
-        XCTAssertEqual(face.meta, "PDF • \(size)")
+        XCTAssertEqual(face.meta, "PDF • 2.4 MB", "English app copy uses English numeric formatting independently of the device's region.")
     }
 
     /// A picture's identifying name is always visible; its size and age are the
@@ -343,11 +342,27 @@ final class WorkboardCardFacePolicyTests: XCTestCase {
         XCTAssertTrue(face.metaWaitsForPointer)
         XCTAssertEqual(
             face.meta,
-            ByteCountFormatter.string(fromByteCount: 5_500_000, countStyle: .file)
+            "5.5 MB"
         )
     }
 
     // MARK: - The third duplication: detail carries availability and size
+
+    func testGeneratedMetadataFromAnEarlierLanguageDoesNotBecomeTheCaption() {
+        let picture = WorkboardMaterialSnapshot(
+            kind: .image,
+            name: "Whiteboard 3",
+            detail: "From a conversation • Disponible en este dispositivo • 5,5 MB",
+            byteCount: 5_500_000
+        )
+        XCTAssertEqual(WorkboardCardFacePolicy.face(for: picture).excerpt, "From a conversation")
+    }
+
+    func testGeneratedShareTitleFromAnEarlierLanguageStaysSuppressed() {
+        XCTAssertTrue(WorkboardCardFacePolicy.isSuppressedGenericTitle("Nota compartida"))
+        XCTAssertTrue(WorkboardCardFacePolicy.isSuppressedGenericTitle("Share note"))
+        XCTAssertFalse(WorkboardCardFacePolicy.isSuppressedGenericTitle("My project notes"))
+    }
 
     /// `WorkboardLiveRepository.materialDetail` joins a caption, an availability
     /// sentence and a size fallback into one field. The card draws availability

@@ -1125,7 +1125,7 @@ final class SettingsViewModel {
                 // `.notDetermined` to `AppError.sttAuthFailed`. Surface
                 // the Settings-app recovery path explicitly.
                 keyStates[presetID] = .invalid(
-                    message: String(localized: "Speech recognition denied. Enable in Settings → Conduck → Speech Recognition.")
+                    message: String(localized: "Speech recognition denied. Enable in Settings → Conduck → Speech Recognition.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
             }
             return
@@ -1134,7 +1134,7 @@ final class SettingsViewModel {
         let candidate = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !candidate.isEmpty else {
             keyStates[presetID] = .invalid(
-                message: String(localized: "Paste your \(providerName) key.")
+                message: String(localized: "Paste your \(providerName) key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         }
@@ -1156,7 +1156,7 @@ final class SettingsViewModel {
         } catch let error as AppError {
             keyStates[presetID] = .invalid(message: friendlyMessage(for: error, providerName: providerName))
         } catch {
-            keyStates[presetID] = .invalid(message: String(localized: "Unexpected error. Try again."))
+            keyStates[presetID] = .invalid(message: String(localized: "Unexpected error. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
     }
 
@@ -1171,11 +1171,11 @@ final class SettingsViewModel {
     private func friendlyMessage(for error: AppError, providerName: String) -> String {
         switch error {
         case .sttAuthFailed:
-            return String(localized: "Invalid key.")
+            return String(localized: "Invalid key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttProviderUnreachable, .noInternetConnection, .networkError, .requestTimeout:
-            return String(localized: "Can't reach \(providerName). Check connection.")
+            return String(localized: "Can't reach \(providerName). Check connection.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttServerError:
-            return String(localized: "\(providerName) is having issues. Try again in a moment.")
+            return String(localized: "\(providerName) is having issues. Try again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttCustomCertUntrusted:
             // The shared refusal + remedy, verbatim — the same words the gateway
             // editor and the voice-endpoint test suite render. `providerName` is
@@ -1205,8 +1205,8 @@ final class SettingsViewModel {
             // arm silently. Same split as
             // `CarPlayRecordingService.speakErrorAndEnd`'s catch-all.
             return error.isRetryable
-                ? String(localized: "Unexpected error. Try again.")  // xcstrings
-                : String(localized: "Unexpected error. Check your settings.")  // xcstrings
+                ? String(localized: "Unexpected error. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
+                : String(localized: "Unexpected error. Check your settings.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
         }
     }
 
@@ -1269,7 +1269,7 @@ final class SettingsViewModel {
     /// probe time (the voice key was cleared between staging and Save/Test).
     private static var reuseMissingVoiceKeyMessage: String {
         String(localized: "settings.remoteAgent.reuse.missingVoiceKey",
-               defaultValue: "The OpenRouter voice key isn't available. Paste an API key instead.")
+               defaultValue: "The OpenRouter voice key isn't available. Paste an API key instead.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     // MARK: - Active Preset Switching
@@ -1470,7 +1470,7 @@ final class SettingsViewModel {
             // cloud provider. Non-retryable (a "Try again" would just re-fail).
             appleTargetKey = requested.identifier
             appleModelStates[requested.identifier] = .failed(
-                message: String(localized: "Apple Speech doesn't support this language yet."),
+                message: String(localized: "Apple Speech doesn't support this language yet.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 retryable: false
             )
         case .supported(let resolved):
@@ -1492,7 +1492,7 @@ final class SettingsViewModel {
                 // AssetInventory disagrees (shouldn't happen for a resolver-
                 // blessed locale). Render as non-retryable structural failure.
                 appleModelStates[resolved.identifier] = .failed(
-                    message: String(localized: "Apple Speech doesn't support this language yet."),
+                    message: String(localized: "Apple Speech doesn't support this language yet.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     retryable: false
                 )
             @unknown default:
@@ -1520,7 +1520,7 @@ final class SettingsViewModel {
             // row's "Use a cloud provider" affordance is the forward path).
             appleTargetKey = requested.identifier
             appleModelStates[requested.identifier] = .failed(
-                message: String(localized: "Apple Speech doesn't support this language yet."),
+                message: String(localized: "Apple Speech doesn't support this language yet.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 retryable: false
             )
             return
@@ -1545,7 +1545,7 @@ final class SettingsViewModel {
             request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber])
         } catch {
             appleModelStates[key] = .failed(
-                message: String(localized: "Couldn't start the download. Check your connection and try again."),
+                message: String(localized: "Couldn't start the download. Check your connection and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 retryable: true
             )
             return
@@ -1582,7 +1582,7 @@ final class SettingsViewModel {
             await reserveAppleLocale(resolved, generation: generation)
         } catch {
             appleModelStates[key] = .failed(
-                message: String(localized: "Download failed. Tap to try again."),
+                message: String(localized: "Download failed. Tap to try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 retryable: true
             )
         }
@@ -1742,14 +1742,14 @@ final class SettingsViewModel {
                 self.appleStandardModelState = .failed(
                     message: String(localized: LocalizedStringResource(
                         "settings.voice.apple.prepare.error.unsupported",
-                        defaultValue: "Apple Speech doesn't support this language yet.")),
+                        defaultValue: "Apple Speech doesn't support this language yet.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     retryable: false)
             } catch {
                 guard gen == self.appleStandardGeneration else { return }
                 self.appleStandardModelState = .failed(
                     message: String(localized: LocalizedStringResource(
                         "settings.voice.apple.prepare.error.failed",
-                        defaultValue: "Couldn't set up voice. Check your connection and try again.")),
+                        defaultValue: "Couldn't set up voice. Check your connection and try again.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     retryable: true)
             }
         }
@@ -2148,7 +2148,7 @@ final class SettingsViewModel {
     /// to three lines at larger Dynamic Type.
     var defaultSelectorDisplayName: String {
         configuredRemoteAgentRefSet.isEmpty
-            ? String(localized: "settings.personalAI.default.notConfigured", defaultValue: "Not configured")
+            ? String(localized: "settings.personalAI.default.notConfigured", defaultValue: "Not configured", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : defaultRemoteAgentDisplayName
     }
 
@@ -2309,7 +2309,7 @@ final class SettingsViewModel {
     var personalAISummaryShort: String {
         let configured = configuredRemoteAgentRefSet
         guard !configured.isEmpty else {
-            return String(localized: "settings.root.personalAI.setupNeeded", defaultValue: "Setup needed")
+            return String(localized: "settings.root.personalAI.setupNeeded", defaultValue: "Setup needed", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         // Nothing chosen is its own answer, and it is asked FIRST: the membership
         // guard below asks about the compatibility projection, which reads
@@ -2321,7 +2321,7 @@ final class SettingsViewModel {
             return String(localized: LocalizedStringResource(
                 "settings.root.personalAI.noDefaultYet",
                 defaultValue: "No default yet"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         // A STORED default outside the configured set names a gateway this device
         // cannot send on. Say that, and say only that — no "needs setup", which
@@ -2343,7 +2343,7 @@ final class SettingsViewModel {
             return String(localized: LocalizedStringResource(
                 "settings.root.personalAI.defaultUnavailable",
                 defaultValue: "Default unavailable here"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         let defaultName = defaultRemoteAgentDisplayName
         // Subtract the default only when it IS in the set. On the silenced
@@ -2369,20 +2369,20 @@ final class SettingsViewModel {
     private var onLaunchShortLabel: String {
         switch onLaunchMode {
         case .startNewConversation:
-            return String(localized: "settings.general.onLaunch.startNew.short", defaultValue: "Start new")
+            return String(localized: "settings.general.onLaunch.startNew.short", defaultValue: "Start new", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .resumeLastConversation:
-            return String(localized: "settings.general.onLaunch.resumeLast.short", defaultValue: "Resume last")
+            return String(localized: "settings.general.onLaunch.resumeLast.short", defaultValue: "Resume last", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
     /// Short label for the active quick-capture continuation policy.
     private var sessionPolicyShortLabel: String {
         switch sessionContinuationPolicy {
-        case .alwaysNew:      return String(localized: "settings.general.session.short.never", defaultValue: "Off")
-        case .minutes15:      return String(localized: "settings.general.session.short.min15", defaultValue: "15 min")
-        case .minutes30:      return String(localized: "settings.general.session.short.min30", defaultValue: "30 min")
-        case .minutes60:      return String(localized: "settings.general.session.short.min60", defaultValue: "60 min")
-        case .alwaysContinue: return String(localized: "settings.general.session.short.always", defaultValue: "Always")
+        case .alwaysNew:      return String(localized: "settings.general.session.short.never", defaultValue: "Off", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        case .minutes15:      return String(localized: "settings.general.session.short.min15", defaultValue: "15 min", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        case .minutes30:      return String(localized: "settings.general.session.short.min30", defaultValue: "30 min", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        case .minutes60:      return String(localized: "settings.general.session.short.min60", defaultValue: "60 min", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        case .alwaysContinue: return String(localized: "settings.general.session.short.always", defaultValue: "Always", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -2424,7 +2424,7 @@ final class SettingsViewModel {
     /// `WatchSettingsView` default-gateway selector row (iPhone-hosted).
     var watchDefaultDisplayName: String {
         guard let ref = watchDefaultOverrideRef else {
-            return String(localized: "settings.watch.default.followPhone", defaultValue: "Follow iPhone")
+            return String(localized: "settings.watch.default.followPhone", defaultValue: "Follow iPhone", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return RemoteAgentRefMetadata.displayName(for: ref, customs: customGateways)
     }
@@ -2473,7 +2473,7 @@ final class SettingsViewModel {
             rows.append(PersonalAIRow(
                 ref: ref,
                 displayName: gateway.name.isEmpty
-                    ? String(localized: "New gateway")
+                    ? String(localized: "New gateway", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     : gateway.name,
                 configured: configuredRemoteAgentRefSet.contains(ref),
                 isDefault: chosenRef == ref
@@ -2523,7 +2523,7 @@ final class SettingsViewModel {
 
     static var gatewayLimitMessage: String {
         String(localized: "settings.remoteAgent.freeLimit.message",
-               defaultValue: "Your free plan includes three active gateways. Upgrade to Pro for unlimited gateways, or manage your free selection. OpenRouter is always available.")
+               defaultValue: "Your free plan includes three active gateways. Upgrade to Pro for unlimited gateways, or manage your free selection. OpenRouter is always available.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Cached custom rows, including unsaved drafts. This is a roster count,
@@ -2803,7 +2803,7 @@ final class SettingsViewModel {
             guard !candidate.isEmpty else {
                 remoteAgentValidationStates[ref] = .invalid(
                     message: String(localized: "remoteAgent.custom.name.required",
-                                    defaultValue: "Give this gateway a name.")
+                                    defaultValue: "Give this gateway a name.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
                 return
             }
@@ -2832,7 +2832,7 @@ final class SettingsViewModel {
         // `.bearer` requires a token; `.none` (keyless) probes with no header.
         if authScheme.requiresToken, trimmedToken.isEmpty {
             remoteAgentValidationStates[ref] = .invalid(
-                message: String(localized: "Paste your \(backendName) bearer token.")
+                message: String(localized: "Paste your \(backendName) bearer token.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         }
@@ -2864,7 +2864,7 @@ final class SettingsViewModel {
             case .invalid:
                 remoteAgentValidationStates[ref] = .invalid(
                     message: String(localized: "settings.remoteAgent.fingerprint.invalid",
-                                    defaultValue: "That fingerprint should be 64 hex characters.")
+                                    defaultValue: "That fingerprint should be 64 hex characters.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
                 return
             }
@@ -3023,7 +3023,7 @@ final class SettingsViewModel {
             }
             remoteAgentLastErrorCodes[ref] = nil
             remoteAgentValidationStates[ref] = .invalid(
-                message: String(localized: "Unexpected error. Try again.")
+                message: String(localized: "Unexpected error. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
         }
     }
@@ -3086,7 +3086,7 @@ final class SettingsViewModel {
             guard !candidate.isEmpty else {
                 remoteAgentValidationStates[ref] = .invalid(
                     message: String(localized: "remoteAgent.custom.name.required",
-                                    defaultValue: "Give this gateway a name.")
+                                    defaultValue: "Give this gateway a name.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
                 return false
             }
@@ -3182,7 +3182,7 @@ final class SettingsViewModel {
             case .invalid:
                 remoteAgentValidationStates[ref] = .invalid(
                     message: String(localized: "settings.remoteAgent.fingerprint.invalid",
-                                    defaultValue: "That fingerprint should be 64 hex characters.")
+                                    defaultValue: "That fingerprint should be 64 hex characters.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
                 return false
             }
@@ -3252,7 +3252,7 @@ final class SettingsViewModel {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !live.isEmpty else {
                 remoteAgentValidationStates[ref] = .invalid(
-                    message: String(localized: "Paste your \(backendName) bearer token.")
+                    message: String(localized: "Paste your \(backendName) bearer token.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
                 return false
             }
@@ -3294,12 +3294,12 @@ final class SettingsViewModel {
             return false
         case .missingToken:
             remoteAgentValidationStates[ref] = .invalid(
-                message: String(localized: "Paste your \(backendName) bearer token.")
+                message: String(localized: "Paste your \(backendName) bearer token.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return false
         case .credentialWriteFailed:
             remoteAgentValidationStates[ref] = .invalid(
-                message: String(localized: "Couldn't save your token securely. Try again.")
+                message: String(localized: "Couldn't save your token securely. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return false
         }
@@ -3558,7 +3558,7 @@ final class SettingsViewModel {
         if authScheme.requiresToken, (storedToken?.isEmpty ?? true) {
             remoteAgentValidationStates[ref] = .invalid(
                 // xcstrings: mac-ui-polish
-                message: String(localized: "No saved token to test. Paste your \(backendName) token first.")
+                message: String(localized: "No saved token to test. Paste your \(backendName) token first.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         }
@@ -3717,14 +3717,14 @@ final class SettingsViewModel {
         // Every lane fact is read off the CONTEXT, so the editor-scoped arms and
         // the delegated ones can never answer for different lanes.
         let hosted = context.category == .hostedModel
-        let generic = String(localized: "Unexpected error. Try again.")
+        let generic = String(localized: "Unexpected error. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // Every template below places the name MID-SENTENCE, so the fallback can
         // be an ordinary noun phrase rather than a proper noun. It is a floor, not
         // a path anybody walks: a built-in's name is a registry literal, and a
         // custom's is refused as empty before the probe runs.
         let trimmedName = instanceName.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = trimmedName.isEmpty
-            ? String(localized: "remoteAgent.editor.instance.fallback", defaultValue: "this AI")
+            ? String(localized: "remoteAgent.editor.instance.fallback", defaultValue: "this AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : trimmedName
         func remedy(_ error: AppError) -> String {
             error.recoverySuggestion(in: context) ?? error.errorDescription(in: context) ?? generic
@@ -3748,7 +3748,7 @@ final class SettingsViewModel {
             // other surface could reproduce it.
             if hosted, keyShapeLooksWrong {
                 return String(localized: "remoteAgent.editor.authFailed.hosted.badShape",
-                              defaultValue: "That API key was rejected — and it doesn't look like a complete OpenRouter key (they start with sk-or-). Check the paste and try again.")
+                              defaultValue: "That API key was rejected — and it doesn't look like a complete OpenRouter key (they start with sk-or-). Check the paste and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             if hosted {
                 // Both halves the shared hosted arm cannot carry: WHAT the
@@ -3756,14 +3756,14 @@ final class SettingsViewModel {
                 // WHOSE dashboard to open. On a fixed-URL lane 401/403 has one
                 // meaning, so the cause can be stated outright.
                 return String(localized: "remoteAgent.editor.authFailed.hosted.v2",
-                              defaultValue: "That API key was rejected. Check it in the dashboard for \(name), then paste it again.")
+                              defaultValue: "That API key was rejected. Check it in the dashboard for \(name), then paste it again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             // Self-hosted keeps BOTH live causes — a rejected credential and an
             // origin refusing the request as it arrives (Ollama 403s any `Host`
             // that isn't local, and a tunnel forwards the original one). Neither
             // is asserted, because 26 cannot tell them apart.
             return String(localized: "remoteAgent.editor.authFailed.selfHosted.v2",
-                          defaultValue: "The request to \(name) was refused. Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses.")
+                          defaultValue: "The request to \(name) was refused. Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentUnreachable, .noInternetConnection, .networkError:
             // One condition, one sentence: 3 and 1 have their own generic
             // transport copy, so the whole group renders the test's own
@@ -3772,10 +3772,10 @@ final class SettingsViewModel {
             // for the reader to go and check before pressing the button again.
             if hosted {
                 return String(localized: "remoteAgent.editor.unreachable.hosted.v2",
-                              defaultValue: "Couldn't reach \(name). Check your internet connection, then test again.")
+                              defaultValue: "Couldn't reach \(name). Check your internet connection, then test again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return withLocalNetworkHint(String(localized: "remoteAgent.editor.unreachable.selfHosted",
-                          defaultValue: "Couldn't reach \(name). Check the gateway is running and reachable from this device, then test again."))
+                          defaultValue: "Couldn't reach \(name). Check the gateway is running and reachable from this device, then test again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .remoteAgentTimeout, .requestTimeout:
             // NO repeat-work-and-cost warning. The shared arm earns that sentence
             // because a converse turn may be mid-flight on the user's own key; a
@@ -3783,17 +3783,17 @@ final class SettingsViewModel {
             // would be false and would discourage the retry that is correct here.
             if hosted {
                 return String(localized: "remoteAgent.editor.timeout.hosted",
-                              defaultValue: "The test timed out waiting for \(name). Test again in a moment.")
+                              defaultValue: "The test timed out waiting for \(name). Test again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return withLocalNetworkHint(String(localized: "remoteAgent.editor.timeout.selfHosted",
-                          defaultValue: "The test timed out waiting for \(name). Check the gateway is running, then test again."))
+                          defaultValue: "The test timed out waiting for \(name). Check the gateway is running, then test again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .remoteAgentServerError:
             if hosted {
                 return String(localized: "remoteAgent.editor.serverError.hosted.v2",
-                              defaultValue: "Couldn't finish the test — \(name) had a server error. Test again in a moment.")
+                              defaultValue: "Couldn't finish the test — \(name) had a server error. Test again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return String(localized: "remoteAgent.editor.serverError.selfHosted",
-                          defaultValue: "Couldn't finish the test — \(name) returned a server error. Check the gateway logs, then test again.")
+                          defaultValue: "Couldn't finish the test — \(name) returned a server error. Check the gateway logs, then test again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentInvalidResponse:
             // The shared self-hosted remedy names `/v1/chat/completions`, which
             // is not the route this probe called. Naming the wrong endpoint on
@@ -3801,10 +3801,10 @@ final class SettingsViewModel {
             // reader to inspect something the test never touched.
             if hosted {
                 return String(localized: "remoteAgent.editor.invalidResponse.hosted.v2",
-                              defaultValue: "Reached \(name), but its reply wasn't in the shape Conduck needs. Test again.")
+                              defaultValue: "Reached \(name), but its reply wasn't in the shape Conduck needs. Test again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return String(localized: "remoteAgent.editor.invalidResponse.selfHosted",
-                          defaultValue: "Reached \(name), but its reply wasn't in the shape Conduck needs. Check it serves an OpenAI-compatible model list, then test again.")
+                          defaultValue: "Reached \(name), but its reply wasn't in the shape Conduck needs. Check it serves an OpenAI-compatible model list, then test again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentCertMismatch:
             // Unreachable for a hosted backend (`.systemTrustOnly` never pins).
             // The shared refusal + remedy, verbatim: the editor is the surface
@@ -4077,7 +4077,7 @@ final class SettingsViewModel {
     /// over `defaultValue:`, so rewording the old key would ship the old string.
     static var localNetworkPermissionHint: String {
         String(localized: "diagnostics.hint.localNetwork.v2",
-               defaultValue: "If this address is on your own network, check Conduck's Local Network permission in Settings — when it's off, the connection just times out.")
+               defaultValue: "If this address is on your own network, check Conduck's Local Network permission in Settings — when it's off, the connection just times out.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The `.insecureRemoteHost` copy — ONE string for all three URL fields.
@@ -4103,7 +4103,7 @@ final class SettingsViewModel {
     /// skim refusals.
     static var plainHTTPRemoteMessage: String {
         String(localized: "settings.endpoint.url.plainHTTPRemote.v2",
-               defaultValue: "Apple allows plain http:// only to an address on your own network. Use the server's IP address or its name ending in .local, or put it behind https://.")
+               defaultValue: "Apple allows plain http:// only to an address on your own network. Use the server's IP address or its name ending in .local, or put it behind https://.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The refusal shown when a saved certificate fingerprint is paired with a
@@ -4118,7 +4118,7 @@ final class SettingsViewModel {
     /// "correct" this.
     static var pinOnPlainHTTPMessage: String {
         String(localized: "settings.endpoint.pin.plainHTTP",
-               defaultValue: "A saved fingerprint can't be checked on an http:// address — nothing hands over a certificate. Clear the fingerprint, or use an https:// address.")
+               defaultValue: "A saved fingerprint can't be checked on an http:// address — nothing hands over a certificate. Clear the fingerprint, or use an https:// address.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The inline `.invalid` copy for a custom voice-endpoint URL the app won't
@@ -4130,13 +4130,13 @@ final class SettingsViewModel {
             return Self.plainHTTPRemoteMessage
         case .carriesUserinfo?:
             return String(localized: "settings.stt.custom.url.userinfo",
-                          defaultValue: "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your endpoint's key goes in the API key field.")
+                          defaultValue: "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your endpoint's key goes in the API key field.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .noHost?:
             return String(localized: "settings.stt.custom.url.noHost",
-                          defaultValue: "That address is missing its host name — it should look like https://voice.example.com.")
+                          defaultValue: "That address is missing its host name — it should look like https://voice.example.com.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         default:
             return String(localized: "settings.stt.custom.url.invalid",
-                          defaultValue: "Enter the full endpoint URL including https://.")
+                          defaultValue: "Enter the full endpoint URL including https://.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -4151,12 +4151,12 @@ final class SettingsViewModel {
             return Self.plainHTTPRemoteMessage
         case .carriesUserinfo?:
             return String(localized: "settings.remoteAgent.url.userinfo",
-                          defaultValue: "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your gateway's token goes in the Token field.")
+                          defaultValue: "Take the username and password out of the address. Conduck won't keep a password inside a URL — that address syncs between your devices as plain text. Your gateway's token goes in the Token field.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .noHost?:
             return String(localized: "settings.remoteAgent.url.noHost",
-                          defaultValue: "That address is missing its host name — it should look like https://ai.example.com.")
+                          defaultValue: "That address is missing its host name — it should look like https://ai.example.com.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         default:
-            return String(localized: "Enter the full gateway URL including https://.")
+            return String(localized: "Enter the full gateway URL including https://.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -4175,13 +4175,13 @@ final class SettingsViewModel {
             return Self.plainHTTPRemoteMessage
         case .carriesUserinfo?:
             return String(localized: "fileTransfer.url.userinfo",
-                          defaultValue: "Don't include a username or password in the URL — Conduck manages the credential for you. Use the address only, and give the generated password to your server.")
+                          defaultValue: "Don't include a username or password in the URL — Conduck manages the credential for you. Use the address only, and give the generated password to your server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .noHost?:
             return String(localized: "fileTransfer.url.noHost",
-                          defaultValue: "That address is missing its host name — it should look like https://files.example.com.")
+                          defaultValue: "That address is missing its host name — it should look like https://files.example.com.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         default:
             return String(localized: "fileTransfer.url.invalid",
-                          defaultValue: "Enter the full file-server URL including https://.")
+                          defaultValue: "Enter the full file-server URL including https://.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -4211,7 +4211,7 @@ final class SettingsViewModel {
         case .invalid:
             fileServerValidationStates[ref] = .invalid(
                 message: String(localized: "settings.remoteAgent.fingerprint.invalid",
-                                defaultValue: "That fingerprint should be 64 hex characters.")
+                                defaultValue: "That fingerprint should be 64 hex characters.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         }
@@ -4857,7 +4857,7 @@ final class SettingsViewModel {
         guard !candidateName.isEmpty else {
             customSTTValidationStates[uuid] = .invalid(
                 message: String(localized: "settings.voice.custom.name.required",
-                                defaultValue: "Give this endpoint a name.")
+                                defaultValue: "Give this endpoint a name.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         }
@@ -4887,7 +4887,7 @@ final class SettingsViewModel {
         if auth != .none, trimmedKey.isEmpty {
             customSTTValidationStates[uuid] = .invalid(
                 message: String(localized: "settings.stt.custom.key.required",
-                                defaultValue: "Paste your endpoint's API key, or switch to No auth.")
+                                defaultValue: "Paste your endpoint's API key, or switch to No auth.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return
         }
@@ -4933,7 +4933,7 @@ final class SettingsViewModel {
             }).flatMap { stage -> String? in
                 if case .failed(let reason) = stage.status { return reason } else { return nil }
             } ?? String(localized: "stt.test.genericFailure",
-                        defaultValue: "The test didn't pass. Check the checklist above.")
+                        defaultValue: "The test didn't pass. Check the checklist above.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             customSTTValidationStates[uuid] = .invalid(message: reason)
             return
         }
@@ -4968,7 +4968,7 @@ final class SettingsViewModel {
         guard !candidateName.isEmpty else {
             customSTTValidationStates[uuid] = .invalid(
                 message: String(localized: "settings.voice.custom.name.required",
-                                defaultValue: "Give this endpoint a name.")
+                                defaultValue: "Give this endpoint a name.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return false
         }
@@ -4993,7 +4993,7 @@ final class SettingsViewModel {
         if auth != .none, trimmedKey.isEmpty, customSTTMaskedTails[uuid] == nil {
             customSTTValidationStates[uuid] = .invalid(
                 message: String(localized: "settings.stt.custom.key.required",
-                                defaultValue: "Paste your endpoint's API key, or switch to No auth.")
+                                defaultValue: "Paste your endpoint's API key, or switch to No auth.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
             return false
         }
@@ -5042,7 +5042,7 @@ final class SettingsViewModel {
             } catch {
                 customSTTValidationStates[uuid] = .invalid(
                     message: String(localized: "settings.stt.custom.key.saveFailed",
-                                    defaultValue: "Couldn't save your key securely. Try again.")
+                                    defaultValue: "Couldn't save your key securely. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
                 return false
             }
@@ -5176,7 +5176,7 @@ final class SettingsViewModel {
                   !stored.isEmpty else {
                 customSTTValidationStates[uuid] = .invalid(
                     message: String(localized: "settings.stt.custom.key.noSaved",
-                                    defaultValue: "No saved key to test. Paste your endpoint's API key first.")
+                                    defaultValue: "No saved key to test. Paste your endpoint's API key first.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
                 return
             }

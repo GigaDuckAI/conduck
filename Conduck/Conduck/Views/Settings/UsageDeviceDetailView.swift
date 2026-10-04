@@ -84,7 +84,7 @@ struct UsageDeviceDetailView: View {
         Section {
             Text(LocalizedStringResource(
                 "settings.usage.detail.empty",
-                defaultValue: "Nothing recorded for this in the selected range."))
+                defaultValue: "Nothing recorded for this in the selected range.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
@@ -99,28 +99,28 @@ struct UsageDeviceDetailView: View {
         Section {
             UsageStatLayout {
                 UsageStatTile(
-                    value: summary.attemptedTurns.formatted(.number),
+                    value: summary.attemptedTurns.formatted(.number.locale(AppLocalization.locale)),
                     label: LocalizedStringResource(
-                        "settings.usage.stat.turns", defaultValue: "Turns"),
+                        "settings.usage.stat.turns", defaultValue: "Turns", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     accessibility: LocalizedStringResource(
                         "settings.usage.stat.turns.a11y",
-                        defaultValue: "\(summary.attemptedTurns) turns sent")
+                        defaultValue: "\(summary.attemptedTurns) turns sent", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
                 UsageStatTile(
-                    value: summary.recordedAttempts.formatted(.number),
+                    value: summary.recordedAttempts.formatted(.number.locale(AppLocalization.locale)),
                     label: LocalizedStringResource(
-                        "settings.usage.detail.stat.attempts", defaultValue: "Attempts"),
+                        "settings.usage.detail.stat.attempts", defaultValue: "Attempts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     accessibility: LocalizedStringResource(
                         "settings.usage.detail.stat.attempts.a11y",
-                        defaultValue: "\(summary.recordedAttempts) recorded attempts")
+                        defaultValue: "\(summary.recordedAttempts) recorded attempts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
                 UsageStatTile(
-                    value: summary.completedTurns.formatted(.number),
+                    value: summary.completedTurns.formatted(.number.locale(AppLocalization.locale)),
                     label: LocalizedStringResource(
-                        "settings.usage.stat.completed", defaultValue: "Completed"),
+                        "settings.usage.stat.completed", defaultValue: "Completed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     accessibility: LocalizedStringResource(
                         "settings.usage.stat.completed.a11y",
-                        defaultValue: "\(summary.completedTurns) turns completed")
+                        defaultValue: "\(summary.completedTurns) turns completed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
             }
             .settingsCardPassiveRow()
@@ -145,7 +145,7 @@ struct UsageDeviceDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.activity.header", defaultValue: "Activity"))
+                "settings.usage.activity.header", defaultValue: "Activity", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         // NO RANGE FOOTER: the picker at the top of this screen already names
         // the window, one card above.
@@ -163,13 +163,13 @@ struct UsageDeviceDetailView: View {
                 value: UsageDetailFormat.percentText(summary.resolvedAttemptSuccessRate),
                 label: LocalizedStringResource(
                     "settings.usage.reliability.headline",
-                    defaultValue: "of resolved attempts succeeded"),
+                    defaultValue: "of resolved attempts succeeded", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.reliability.headline.a11y",
                     defaultValue: """
                         \(UsageDetailFormat.percentText(summary.resolvedAttemptSuccessRate)) of \
                         resolved attempts succeeded
-                        """)
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
 
             UsageDetailRows.reliability(summary)
@@ -178,20 +178,20 @@ struct UsageDeviceDetailView: View {
                 UsageValueRow(
                     label: LocalizedStringResource(
                         "settings.usage.reliability.truncated",
-                        defaultValue: "Replies cut short"),
-                    value: summary.truncatedReplies.formatted(.number),
+                        defaultValue: "Replies cut short", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
+                    value: summary.truncatedReplies.formatted(.number.locale(AppLocalization.locale)),
                     icon: "scissors"
                 )
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.reliability.header", defaultValue: "Reliability"))
+                "settings.usage.reliability.header", defaultValue: "Reliability", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.usage.reliability.footer.rate",
                 defaultValue: """
                     Cancelled and unconfirmed attempts stay out of this rate.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -204,7 +204,7 @@ struct UsageDeviceDetailView: View {
             if timing.sampleCount == 0 {
                 Text(LocalizedStringResource(
                     "settings.usage.response.none",
-                    defaultValue: "No attempt in this range finished with usable timing."))
+                    defaultValue: "No attempt in this range finished with usable timing.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .settingsCardPassiveRow()
@@ -213,10 +213,10 @@ struct UsageDeviceDetailView: View {
                     UsageStatTile(
                         value: UsageDetailFormat.durationText(timing.mean),
                         label: LocalizedStringResource(
-                            "settings.usage.response.average", defaultValue: "Average"),
+                            "settings.usage.response.average", defaultValue: "Average", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         accessibility: LocalizedStringResource(
                             "settings.usage.response.average.a11y",
-                            defaultValue: "Average full-response time \(UsageDetailFormat.durationText(timing.mean))"),
+                            defaultValue: "Average full-response time \(UsageDetailFormat.durationText(timing.mean))", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         prominent: true
                     )
                     // Withheld below the aggregator's minimum sample count,
@@ -226,10 +226,10 @@ struct UsageDeviceDetailView: View {
                             value: UsageDetailFormat.durationText(p90),
                             label: LocalizedStringResource(
                                 "settings.usage.response.p90",
-                                defaultValue: "90th percentile"),
+                                defaultValue: "90th percentile", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             accessibility: LocalizedStringResource(
                                 "settings.usage.response.p90.a11y",
-                                defaultValue: "90th percentile full-response time \(UsageDetailFormat.durationText(p90))"),
+                                defaultValue: "90th percentile full-response time \(UsageDetailFormat.durationText(p90))", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             prominent: true
                         )
                     }
@@ -243,14 +243,14 @@ struct UsageDeviceDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.response.header", defaultValue: "Full-response time"))
+                "settings.usage.response.header", defaultValue: "Full-response time", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.usage.response.footer.scope",
                 defaultValue: """
                     Includes the network and any tools your agent ran — not \
                     model latency.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -266,20 +266,20 @@ struct UsageDeviceDetailView: View {
             ForEach(inputModes, id: \.mode) { slice in
                 UsageValueRow(
                     label: UsageInputModeDisplay.label(slice.mode),
-                    value: slice.attempts.formatted(.number),
+                    value: slice.attempts.formatted(.number.locale(AppLocalization.locale)),
                     caption: LocalizedStringResource(
                         "settings.usage.detail.input.caption",
                         defaultValue: """
                             \(UsageDetailFormat.percentText(GatewayUsageAggregator.ratio(slice.attempts, total))) \
                             of attempts · \(slice.turns) turns
-                            """),
+                            """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     icon: UsageInputModeDisplay.icon(slice.mode),
                     iconTint: AppColors.usageIconBlue
                 )
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.detail.input.header", defaultValue: "Input"))
+                "settings.usage.detail.input.header", defaultValue: "Input", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         // NO FOOTER — each row already carries its own share and turn count,
         // and the overview's Input card is where a reader arrived from.
@@ -306,7 +306,7 @@ struct UsageDeviceDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.byGateway.header", defaultValue: "By gateway"))
+                "settings.usage.byGateway.header", defaultValue: "By gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text(UsageDetailFormat.shareCaption)
@@ -329,16 +329,16 @@ enum UsageInputModeDisplay {
         switch mode {
         case .text:
             return LocalizedStringResource(
-                "settings.usage.detail.input.text", defaultValue: "Typed")
+                "settings.usage.detail.input.text", defaultValue: "Typed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .voice:
             return LocalizedStringResource(
-                "settings.usage.detail.input.voice", defaultValue: "Voice")
+                "settings.usage.detail.input.voice", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .shared:
             return LocalizedStringResource(
-                "settings.usage.detail.input.shared", defaultValue: "Shared in")
+                "settings.usage.detail.input.shared", defaultValue: "Shared in", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .unknown:
             return LocalizedStringResource(
-                "settings.usage.detail.input.unknown", defaultValue: "Not recorded")
+                "settings.usage.detail.input.unknown", defaultValue: "Not recorded", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

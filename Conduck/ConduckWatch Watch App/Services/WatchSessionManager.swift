@@ -88,13 +88,16 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// calls `activate()`, so it observes no live session.
     private let pullTransport: SettingsPullTransport
     private let contentSyncPreferences: ContentSyncPreferenceStore
+    private let appLanguageStore: AppLanguageStore
 
     init(
         pullTransport: SettingsPullTransport = WCSessionSettingsPullTransport(),
-        contentSyncPreferences: ContentSyncPreferenceStore = .shared
+        contentSyncPreferences: ContentSyncPreferenceStore = .shared,
+        appLanguageStore: AppLanguageStore = .shared
     ) {
         self.pullTransport = pullTransport
         self.contentSyncPreferences = contentSyncPreferences
+        self.appLanguageStore = appLanguageStore
         super.init()
     }
 
@@ -131,6 +134,7 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
         Task { @MainActor in
             WatchLog.note(.session, "wc.activated", ["state": activationState.rawValue, "err": errorCode])
             self.isCompanionReachable = isReachable
+            self.appLanguageStore.inheritFromPhone(WCSession.default.receivedApplicationContext[AppLanguageStore.watchMessageKey])
             self.applyContentSyncPreference(WCSession.default.receivedApplicationContext)
 
             // Check if application context already has a user ID
@@ -170,6 +174,7 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
                 }
             }
 
+            self.appLanguageStore.inheritFromPhone(context[AppLanguageStore.watchMessageKey])
             // Handle settings update
             self.applyContentSyncPreference(context)
             WatchSettingsReader.shared.updateFromContext(context)
@@ -365,6 +370,7 @@ final class WatchSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     @MainActor
     func applyEnvelopePayload(_ payload: [String: Any]) async {
         let applyStarted = Date()
+        self.appLanguageStore.inheritFromPhone(payload[AppLanguageStore.watchMessageKey])
         applyContentSyncPreference(payload)
         // STT envelope (presetID + apiKey + monotonic timestamp).
         if let envelopeDict = payload[Constants.sttActivePresetEnvelopeKey] as? [String: Any],

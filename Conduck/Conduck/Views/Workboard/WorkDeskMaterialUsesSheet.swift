@@ -19,11 +19,11 @@ struct WorkDeskMaterialUsesSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(verbatim: materialName).font(.headline)
                     Text(LocalizedStringResource("workdesk.material.used.explanation",
-                        defaultValue: "These conversations used a copy of the material as it was when sent. Moving or editing it in Work doesn’t change earlier messages."))
+                        defaultValue: "These conversations used a copy of the material as it was when sent. Moving or editing it in Work doesn’t change earlier messages.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                     if uses.isEmpty {
                         Text(LocalizedStringResource("workdesk.material.used.empty",
-                            defaultValue: "No saved conversations use this material."))
+                            defaultValue: "No saved conversations use this material.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .foregroundStyle(AppColors.textSecondary)
                     }
                     ForEach(uses) { use in
@@ -52,7 +52,7 @@ struct WorkDeskMaterialUsesSheet: View {
             .navigationTitle(Text(WorkDeskCopy.conversationUses(uses.count)))
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringResource("common.done", defaultValue: "Done")) { dismiss() }
+                    Button(LocalizedStringResource("common.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { dismiss() }
                 }
             }
         }
@@ -62,7 +62,7 @@ struct WorkDeskMaterialUsesSheet: View {
 
     private func gatewayName(_ raw: String) -> String {
         guard let ref = RemoteAgentRef(rawString: raw) else {
-            return String(localized: "workdesk.conversation.connectionMissing", defaultValue: "Connection unavailable")
+            return String(localized: "workdesk.conversation.connectionMissing", defaultValue: "Connection unavailable", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return RemoteAgentRefMetadata.displayName(for: ref, customs: workspace.conversationSettings.customGateways)
     }

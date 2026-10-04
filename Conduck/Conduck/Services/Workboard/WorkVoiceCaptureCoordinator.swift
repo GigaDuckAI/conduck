@@ -112,7 +112,7 @@ enum WorkVoiceCaptureCoordinator {
         String(localized: LocalizedStringResource(
             "workdesk.capture.project.atomic.failed.message",
             defaultValue: "Some items couldn’t be added to the project. They’re safe on Home. Open Home to organise them."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     #if CONDUCK_TESTING
@@ -572,7 +572,7 @@ enum WorkVoiceCaptureCoordinator {
         String(
             localized: "workboard.voice.recording.untitled",
             defaultValue: "Voice note"
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
 }

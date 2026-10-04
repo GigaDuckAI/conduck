@@ -369,8 +369,8 @@ enum PendingRetryGuard {
         // Reuses the pre-existing "Recording Saved" key (12 locales translated)
         // rather than adding a sentence-case duplicate; iOS notification titles
         // display fine in title case.
-        content.title = String(localized: "Recording Saved")
-        content.body = String(localized: "Tap to retry your transcription.")
+        content.title = String(localized: "Recording Saved", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+        content.body = String(localized: "Tap to retry your transcription.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         content.sound = .default
 
         let trigger = UNTimeIntervalNotificationTrigger(

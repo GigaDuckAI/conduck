@@ -960,7 +960,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             if responseOverCap {
                 WatchLog.error(.stt, "stt.bg.overcap")
                 surfaceTurnFailure(
-                    message: String(localized: "Could not process response."),
+                    message: String(localized: "Could not process response.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     conversationID: nil
                 )
                 return
@@ -973,7 +973,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             surfaceTurnFailure(
                 message: WatchNetworkFailureCopy.transportFailureMessage(
                     for: error,
-                    fallback: String(localized: "Recording could not be sent. Please try again.")
+                    fallback: String(localized: "Recording could not be sent. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 ),
                 conversationID: nil
             )
@@ -992,7 +992,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             WatchLog.error(.stt, "stt.bg.http", ["provider": provider.id, "status": http.statusCode, "code": mapped.errorCode])
             // xcstrings
             surfaceTurnFailure(
-                message: String(localized: "Recording could not be sent. Please try again."),
+                message: String(localized: "Recording could not be sent. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 conversationID: nil
             )
             return
@@ -1002,7 +1002,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
         guard let data = body else {
             // xcstrings
             surfaceTurnFailure(
-                message: String(localized: "No response received from server."),
+                message: String(localized: "No response received from server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 conversationID: nil
             )
             return
@@ -1078,7 +1078,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             WatchLog.error(.stt, "stt.bg.decode", ["code": appError?.errorCode ?? -1])
             surfaceTurnFailure(
                 message: appError?.errorDescription
-                    ?? String(localized: "Could not process response."),
+                    ?? String(localized: "Could not process response.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 conversationID: nil
             )
         }
@@ -1318,7 +1318,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                     // what this device could do with the answer afterwards.
                     WatchLog.error(.converse, "converse.bg.appendFail")
                     surfaceTurnFailure(
-                        message: String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI."),
+                        message: String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                         conversationID: cid,
                         userMessageID: userMessageID,
                         attempt: observation
@@ -1362,7 +1362,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                     guard WatchSettingsReader.shared.configuredBackendRefs().count >= 2,
                           let raw = metadata?.backendRawValue,
                           let ref = RemoteAgentRef(rawString: raw) else {
-                        return String(localized: "remoteAgent.notification.reply.title", defaultValue: "Reply from your AI")
+                        return String(localized: "remoteAgent.notification.reply.title", defaultValue: "Reply from your AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     }
                     return RemoteAgentRefMetadata.shortDisplayName(
                         for: ref,
@@ -1385,7 +1385,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                         // empty, and a BLANK banner reads as a bug in Conduck
                         // rather than as a bad reply.
                         fallback: String(localized: "remoteAgent.notification.reply.emptyBody",
-                                         defaultValue: "Your AI replied. Open Conduck to read it.")
+                                         defaultValue: "Your AI replied. Open Conduck to read it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     ),
                     conversationID: cid,
                     backendRef: metadata?.backendRawValue
@@ -1413,7 +1413,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // errors keep the generic fallback.
             return WatchNetworkFailureCopy.transportFailureMessage(
                 for: error,
-                fallback: String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
+                fallback: String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
         case .responseOverCap:
             // A body past `Constants.maxBackgroundResponseBytes` — the reply is
@@ -1422,7 +1422,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // The point of the branch is that the turn FAILS VISIBLY, with the
             // ordinary Retry affordance, instead of vanishing as a cancel.
             WatchLog.error(.converse, "converse.bg.overcap")
-            return String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI.")
+            return String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .certificateUntrusted:
             // ONE cause, ONE wording: the shared text every other surface renders,
             // in its wrist form (the three server-side routes don't fit here, so it
@@ -1448,9 +1448,9 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // only reachable when a trust note happened to be left on the task.
             WatchLog.error(.converse, "converse.bg.insecureBlocked")
             return String(localized: "watch.error.insecureBlocked.v2",
-                          defaultValue: "Apple blocked this connection — the address isn't encrypted. Fix it on your iPhone.")
+                          defaultValue: "Apple blocked this connection — the address isn't encrypted. Fix it on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .cancelledAcrossLaunch, .missingHTTPResponse:
-            return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
+            return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .classifiedBody(let classified):
             // Metadata only — the numeric code and the frozen wire code. The body
             // that produced this is never logged (it is an agent reply / server
@@ -1468,7 +1468,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             // matters because this text mirrors to the paired iPhone's lock screen.
             let body = classified.appError.descriptionWithRecovery(for: ref)
             return body.isEmpty
-                ? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
+                ? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 : body
         case .httpStatus(let status):
             WatchLog.error(.converse, "converse.bg.http", ["status": status])
@@ -1490,20 +1490,20 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
             guard let error = RemoteAgentStatusMap.unified.map(status) else {
                 // 2xx cannot reach a failure verdict; keep the old line as the
                 // impossible-case fallback rather than inventing new copy.
-                return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
+                return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             let body = error.descriptionWithRecovery(for: ref)
             return body.isEmpty
-                ? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
+                ? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 : body
         case .undecodableReply:
-            return String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI.")
+            return String(localized: "watch.error.invalidResponse", defaultValue: "Couldn't read the reply from your AI.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .noConversationID:
             // anti-phantom-reply: a decoded reply with no home (metadata
             // decode failed) surfaces a soft failure instead of a success
             // notification for a turn that isn't in any thread.
             WatchLog.error(.converse, "converse.bg.noConvID")
-            return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
+            return String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -1668,7 +1668,7 @@ final class WatchAudioUploader: NSObject, URLSessionDataDelegate {
                 endPersistenceWork()
             }
         }
-        postNotification(title: String(localized: "Conduck"), body: message)
+        postNotification(title: String(localized: "Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale), body: message)
     }
 
     // MARK: - Notifications

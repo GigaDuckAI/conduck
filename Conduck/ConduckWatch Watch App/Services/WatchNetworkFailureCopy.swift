@@ -52,11 +52,11 @@ enum WatchNetworkFailureCopy {
         switch (error as? URLError)?.code {
         case .notConnectedToInternet:
             // -1009 — the high-confidence companion-proxy signal. Hedged (constraint 1).
-            return String(localized: "Couldn't connect to the internet. If your iPhone is nearby, your watch may be using its connection. Make sure the iPhone is online, or turn it off, then try again so your watch uses its own Wi-Fi.")
+            return String(localized: "Couldn't connect to the internet. If your iPhone is nearby, your watch may be using its connection. Make sure the iPhone is online, or turn it off, then try again so your watch uses its own Wi-Fi.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .timedOut, .cannotConnectToHost, .networkConnectionLost:
             // -1001 / -1004 / -1005 — connectivity, but not specific enough to point
             // at the companion iPhone. Broader hint, no over-claim (constraint 2).
-            return String(localized: "Couldn't reach the internet. Check your connection and try again.")
+            return String(localized: "Couldn't reach the internet. Check your connection and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .appTransportSecurityRequiresSecureConnection:
             // -1022. RECOGNISED and deterministic, so it earns an arm rather
             // than the `fallback` constraint 3 sends unknown codes to: the
@@ -66,7 +66,7 @@ enum WatchNetworkFailureCopy {
             // Compact, and it sends the fix to the phone, which is the only
             // surface that can edit the address.
             return String(localized: "watch.error.insecureBlocked.v2",
-                          defaultValue: "Apple blocked this connection — the address isn't encrypted. Fix it on your iPhone.")
+                          defaultValue: "Apple blocked this connection — the address isn't encrypted. Fix it on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .serverCertificateUntrusted, .serverCertificateHasUnknownRoot,
              .serverCertificateHasBadDate, .serverCertificateNotYetValid:
             // -1202 / -1203 / -1201 / -1204 — the trust layer named the certificate,

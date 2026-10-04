@@ -192,6 +192,9 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
             context[Constants.sttPreferredLanguageKVSKey] = preferredLanguage
         }
 
+        if let language = AppLanguageStore.shared.watchPayload {
+            context[AppLanguageStore.watchMessageKey] = language
+        }
         do {
             try WCSession.default.updateApplicationContext(context)
         } catch {
@@ -269,6 +272,9 @@ final class PhoneSessionManager: NSObject, WCSessionDelegate, ObservableObject {
     /// decision.
     private func assembleSettingsPayload() async -> [String: Any] {
         var payload: [String: Any] = [:]
+        if let language = AppLanguageStore.shared.watchPayload {
+            payload[AppLanguageStore.watchMessageKey] = language
+        }
         // Explicit OFF must travel even when no provider or gateway exists.
         // Preserve the revision: a transport delivery is not a new user choice.
         if let preference = ContentSyncWatchWire.encodedPreference(

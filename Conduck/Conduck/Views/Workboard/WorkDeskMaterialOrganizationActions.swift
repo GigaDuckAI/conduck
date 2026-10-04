@@ -81,20 +81,20 @@ struct WorkDeskMaterialOrganizationActions {
         }
         let source = [title, gateway].compactMap { $0 }.joined(separator: " · ")
         return source.isEmpty
-            ? String(localized: "workdesk.result.sourceConversation", defaultValue: "project conversation")
+            ? String(localized: "workdesk.result.sourceConversation", defaultValue: "project conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : source
     }
     var accessibilityMetadata: [String] {
         var parts: [String] = []
         if showsLocation {
             var names = projects.map(\.title)
-            if isOnHome { names.insert(String(localized: "workdesk.material.home", defaultValue: "Home"), at: 0) }
+            if isOnHome { names.insert(String(localized: "workdesk.material.home", defaultValue: "Home", bundle: AppLocalization.bundle, locale: AppLocalization.locale), at: 0) }
             if !names.isEmpty {
-                parts.append(String(localized: "workdesk.material.locations", defaultValue: "In \(names.joined(separator: ", "))"))
+                parts.append(String(localized: "workdesk.material.locations", defaultValue: "In \(names.joined(separator: ", "))", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             }
         }
         if showsSource {
-            parts.append(String(localized: "workdesk.result.from", defaultValue: "From \(sourceName)"))
+            parts.append(String(localized: "workdesk.result.from", defaultValue: "From \(sourceName)", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         if !uses.isEmpty { parts.append(String(localized: WorkDeskCopy.conversationUses(uses.count))) }
         return parts
@@ -178,16 +178,16 @@ struct WorkDeskMaterialMenuActions: View {
                     Button { actions.openProject(project.id) } label: { Text(verbatim: project.title) }
                 }
             } label: {
-                Label(LocalizedStringResource("workdesk.material.openProject", defaultValue: "Open project"), systemImage: "folder")
+                Label(LocalizedStringResource("workdesk.material.openProject", defaultValue: "Open project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder")
             }
         }
         if actions.showsSource {
             Button { actions.openSource() } label: {
-                Label(LocalizedStringResource("workdesk.result.openSource", defaultValue: "Open source conversation"), systemImage: "bubble.left")
+                Label(LocalizedStringResource("workdesk.result.openSource", defaultValue: "Open source conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "bubble.left")
             }
         }
         Button { actions.select() } label: {
-            Label(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material"), systemImage: "checkmark.circle")
+            Label(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "checkmark.circle")
         }
         if actions.canStartConversation {
             Button { actions.startConversation() } label: {
@@ -196,17 +196,17 @@ struct WorkDeskMaterialMenuActions: View {
         }
         if actions.canCreateProject {
             Button { actions.createProject() } label: {
-                Label(LocalizedStringResource("workdesk.group", defaultValue: "Create project"), systemImage: "folder.badge.plus")
+                Label(LocalizedStringResource("workdesk.group", defaultValue: "Create project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder.badge.plus")
             }
         }
         if actions.canMoveHome {
             Button { Task { await actions.move(to: nil) } } label: {
-                Label(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home"), systemImage: "tray.and.arrow.up")
+                Label(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "tray.and.arrow.up")
             }
         }
         if actions.canRemoveFromProject {
             Button { Task { await actions.removeFromProject() } } label: {
-                Label(LocalizedStringResource("workdesk.removeFromThisProject", defaultValue: "Remove from this project"), systemImage: "folder.badge.minus")
+                Label(LocalizedStringResource("workdesk.removeFromThisProject", defaultValue: "Remove from this project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder.badge.minus")
             }
         }
         if actions.canMove, !actions.destinations.isEmpty {
@@ -217,7 +217,7 @@ struct WorkDeskMaterialMenuActions: View {
                     }
                 }
             } label: {
-                Label(LocalizedStringResource("workdesk.move", defaultValue: "Move to"), systemImage: "folder")
+                Label(LocalizedStringResource("workdesk.move", defaultValue: "Move to", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder")
             }
         }
         if !actions.additionalDestinations.isEmpty {
@@ -226,7 +226,7 @@ struct WorkDeskMaterialMenuActions: View {
                     Button { Task { await actions.add(to: project.id) } } label: { Text(verbatim: project.title) }
                 }
             } label: {
-                Label(LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…"), systemImage: "folder.badge.plus")
+                Label(LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder.badge.plus")
             }
         }
 
@@ -257,40 +257,40 @@ struct WorkDeskMaterialAccessibilityActions: View {
         if actions.showsLocation {
             ForEach(actions.projects) { project in
                 Button { actions.openProject(project.id) } label: {
-                    Text(LocalizedStringResource("workdesk.material.openNamedProject", defaultValue: "Open \(project.title)"))
+                    Text(LocalizedStringResource("workdesk.material.openNamedProject", defaultValue: "Open \(project.title)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
         }
         if actions.showsSource {
-            Button(LocalizedStringResource("workdesk.result.openSource", defaultValue: "Open source conversation")) { actions.openSource() }
+            Button(LocalizedStringResource("workdesk.result.openSource", defaultValue: "Open source conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { actions.openSource() }
         }
-        Button(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material")) { actions.select() }
+        Button(LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { actions.select() }
         if actions.canStartConversation {
             Button(actions.conversationTitle) { actions.startConversation() }
         }
         if actions.canCreateProject {
-            Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project")) { actions.createProject() }
+            Button(LocalizedStringResource("workdesk.group", defaultValue: "Create project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { actions.createProject() }
         }
         if actions.canMoveHome {
-            Button(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home")) {
+            Button(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 Task { await actions.move(to: nil) }
             }
         }
         if actions.canRemoveFromProject {
-            Button(LocalizedStringResource("workdesk.removeFromThisProject", defaultValue: "Remove from this project")) {
+            Button(LocalizedStringResource("workdesk.removeFromThisProject", defaultValue: "Remove from this project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 Task { await actions.removeFromProject() }
             }
         }
         if actions.canMove {
             ForEach(actions.destinations) { project in
                 Button { Task { await actions.move(to: project.id) } } label: {
-                    Text(LocalizedStringResource("workdesk.material.moveToNamedProject", defaultValue: "Move to \(project.title)"))
+                    Text(LocalizedStringResource("workdesk.material.moveToNamedProject", defaultValue: "Move to \(project.title)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
         }
         ForEach(actions.additionalDestinations) { project in
             Button { Task { await actions.add(to: project.id) } } label: {
-                Text(LocalizedStringResource("workdesk.material.addToNamedProject", defaultValue: "Add to \(project.title)"))
+                Text(LocalizedStringResource("workdesk.material.addToNamedProject", defaultValue: "Add to \(project.title)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
 
@@ -300,9 +300,9 @@ struct WorkDeskMaterialAccessibilityActions: View {
 enum WorkDeskMaterialConversationCopy {
     static func title(count: Int) -> LocalizedStringResource {
         if count == 1 {
-            return LocalizedStringResource("workdesk.conversation.withOneMaterial", defaultValue: "New conversation with 1 material…")
+            return LocalizedStringResource("workdesk.conversation.withOneMaterial", defaultValue: "New conversation with 1 material…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
-        return LocalizedStringResource("workdesk.conversation.withMaterials", defaultValue: "New conversation with \(count) materials…")
+        return LocalizedStringResource("workdesk.conversation.withMaterials", defaultValue: "New conversation with \(count) materials…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 }
 
@@ -322,7 +322,7 @@ struct WorkDeskMaterialLocation: View {
         VStack(alignment: .leading, spacing: 2) {
             if actions.showsSource {
                 Label {
-                    Text(LocalizedStringResource("workdesk.result.from", defaultValue: "From \(actions.sourceName)"))
+                    Text(LocalizedStringResource("workdesk.result.from", defaultValue: "From \(actions.sourceName)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 } icon: { Image(systemName: "bubble.left") }
                     .font(.caption2).lineLimit(1).padding(.vertical, 3)
                     .foregroundStyle(AppColors.textSecondary)
@@ -336,7 +336,7 @@ struct WorkDeskMaterialLocation: View {
             }
             if actions.showsLocation {
                 if actions.projects.count > 1 {
-                    Label(LocalizedStringResource("workdesk.material.projectCount", defaultValue: "In \(actions.projects.count) projects"), systemImage: "folder.on.folder")
+                    Label(LocalizedStringResource("workdesk.material.projectCount", defaultValue: "In \(actions.projects.count) projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder.on.folder")
                         .font(.caption2).lineLimit(1).padding(.vertical, 3)
                         .foregroundStyle(AppColors.textSecondary)
                 } else if let project = actions.projects.first {
@@ -345,7 +345,7 @@ struct WorkDeskMaterialLocation: View {
                         .foregroundStyle(AppColors.textSecondary)
                         .anchorPreference(key: WorkDeskMetadataBounds.self, value: .bounds) { [.project: $0] }
                 } else {
-                    Label(LocalizedStringResource("workdesk.material.home", defaultValue: "Home"), systemImage: "tray")
+                    Label(LocalizedStringResource("workdesk.material.home", defaultValue: "Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "tray")
                         .font(.caption2).foregroundStyle(AppColors.textTertiary).lineLimit(1)
                 }
             }

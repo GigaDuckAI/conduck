@@ -46,7 +46,7 @@ struct GatewayCommandsView: View {
             Text(LocalizedStringResource(
                 "gateway.commands.title.run",
                 defaultValue: "Run the setup command"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .onboardingScaledFont(.title2, weight: .bold)
             .foregroundStyle(AppColors.textEmphasis)
             .multilineTextAlignment(.center)
@@ -60,7 +60,7 @@ struct GatewayCommandsView: View {
                 Text(LocalizedStringResource(
                     "gateway.commands.intro.paste",
                     defaultValue: "Run it in a terminal on that server."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -94,12 +94,12 @@ struct GatewayCommandsView: View {
             ctaLabel(LocalizedStringResource(
                 "gateway.commands.cta.paste.mac",
                 defaultValue: "Paste setup code"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             #else
             ctaLabel(LocalizedStringResource(
                 "gateway.commands.cta.paste",
                 defaultValue: "Scan or paste setup code"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             #endif
         }
         .primaryCTAButton()
@@ -168,11 +168,11 @@ struct GatewayCommandsView: View {
         #if os(macOS)
         return LocalizedStringResource(
             "gateway.commands.handoff.outcome.mac",
-            defaultValue: "conduck-connect ends with a setup code")
+            defaultValue: "conduck-connect ends with a setup code", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #else
         return LocalizedStringResource(
             "gateway.commands.handoff.outcome",
-            defaultValue: "conduck-connect ends with a QR code and a setup code")
+            defaultValue: "conduck-connect ends with a QR code and a setup code", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #endif
     }
 
@@ -180,7 +180,7 @@ struct GatewayCommandsView: View {
         #if os(macOS)
         return LocalizedStringResource(
             "gateway.commands.handoff.action.mac",
-            defaultValue: "Then paste it to finish.")
+            defaultValue: "Then paste it to finish.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #else
         // "here" — this device is where the code gets entered, whatever route the
         // user took to the terminal. The retired `…action.return` said "Come back
@@ -195,7 +195,7 @@ struct GatewayCommandsView: View {
         // entry's `defaultValue:` never renders (the catalog value wins).
         return LocalizedStringResource(
             "gateway.commands.handoff.action.here",
-            defaultValue: "Scan or paste it here to finish.")
+            defaultValue: "Scan or paste it here to finish.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         #endif
     }
 }

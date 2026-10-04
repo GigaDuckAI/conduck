@@ -353,7 +353,7 @@ struct HostedModelEditStepView: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.openRouter.signIn.staged",
                     defaultValue: "Signed in with OpenRouter"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .onboardingScaledFont(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
                 Spacer(minLength: 0)
@@ -370,7 +370,7 @@ struct HostedModelEditStepView: View {
             Text(LocalizedStringResource(
                 "settings.remoteAgent.openRouter.signIn.stagedDetail",
                 defaultValue: "A new API key now sits in your OpenRouter account."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.caption)
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -381,7 +381,7 @@ struct HostedModelEditStepView: View {
                             Text(LocalizedStringResource(
                                 "settings.remoteAgent.openRouter.signIn.manage",
                                 defaultValue: "Manage on OpenRouter"
-                            ))
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             Image(systemName: "arrow.up.right")
                                 .onboardingScaledFont(.caption)
                         }
@@ -396,7 +396,7 @@ struct HostedModelEditStepView: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.openRouter.signIn.useDifferentKey",
                         defaultValue: "Use a different key"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .onboardingScaledFont(.subheadline, weight: .semibold)
                 }
                 .inlineLinkButton()
@@ -431,7 +431,7 @@ struct HostedModelEditStepView: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.openRouter.signIn.discarded",
                     defaultValue: "The key you signed in with still exists in your OpenRouter account."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .onboardingScaledFont(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -443,7 +443,7 @@ struct HostedModelEditStepView: View {
                         Text(LocalizedStringResource(
                             "settings.remoteAgent.openRouter.signIn.manage",
                             defaultValue: "Manage on OpenRouter"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         Image(systemName: "arrow.up.right")
                             .onboardingScaledFont(.caption)
                     }
@@ -457,7 +457,7 @@ struct HostedModelEditStepView: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.openRouter.signIn.discardedDismiss",
                         defaultValue: "Dismiss"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .onboardingScaledFont(.subheadline, weight: .semibold)
                 }
                 .inlineLinkButton()
@@ -481,7 +481,7 @@ struct HostedModelEditStepView: View {
             String(localized: LocalizedStringResource(
                 "settings.remoteAgent.hosted.edit.replaceKey.placeholder",
                 defaultValue: "Replace API key"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             text: $pendingKey
         )
             // No `.textContentType(.password)`: an API key is a secret, not a

@@ -297,9 +297,9 @@ enum AudioRecorderError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .permissionDenied:
-            return String(localized: "Microphone permission denied. Enable in Settings → Privacy → Microphone.")
+            return String(localized: "Microphone permission denied. Enable in Settings → Privacy → Microphone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .recordingFailed:
-            return String(localized: "Failed to start audio recording.")
+            return String(localized: "Failed to start audio recording.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .microphoneBusy:
             // The taxonomy's own sentence for this state, so the primitive and
             // every surface above it say the same thing and no second row is

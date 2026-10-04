@@ -972,7 +972,7 @@ actor WorkCaptureDrainer {
     static func noteTitle(for trimmedNote: String) -> String {
         let derived = WorkboardWorkspaceCaptureLogic.title(for: trimmedNote)
         return derived.isEmpty
-            ? String(localized: "workboard.capture.note", defaultValue: "Share note")
+            ? String(localized: "workboard.capture.note", defaultValue: "Share note", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : derived
     }
 
@@ -1021,7 +1021,7 @@ actor WorkCaptureDrainer {
                 id: entry.id,
                 kind: .note,
                 title: entry.displayName
-                    ?? String(localized: "workboard.capture.sharedText", defaultValue: "Shared text"),
+                    ?? String(localized: "workboard.capture.sharedText", defaultValue: "Shared text", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 textContent: text,
                 storageMode: .metadataOnly,
                 sourceDevice: sourceDevice,
@@ -1063,12 +1063,12 @@ actor WorkCaptureDrainer {
             let isWebPage = entry.kind == .webPage
             let fallbackTitle: String = {
                 if isImage {
-                    return String(localized: "workboard.capture.image", defaultValue: "Image")
+                    return String(localized: "workboard.capture.image", defaultValue: "Image", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 }
                 if isWebPage {
-                    return String(localized: "workboard.capture.webPage", defaultValue: "Web page")
+                    return String(localized: "workboard.capture.webPage", defaultValue: "Web page", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 }
-                return String(localized: "workboard.capture.file", defaultValue: "File")
+                return String(localized: "workboard.capture.file", defaultValue: "File", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }()
             let filename = entry.displayName ?? entry.relativePath
             // Never `.audio`. A playable recording card is made at the desk's

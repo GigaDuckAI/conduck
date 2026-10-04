@@ -44,7 +44,7 @@ struct GatewayHeadsUpView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.headsUp.title",
                 defaultValue: "Quick heads-up"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .onboardingScaledFont(.title2, weight: .bold)
             .foregroundStyle(AppColors.textEmphasis)
             .multilineTextAlignment(.center)
@@ -69,7 +69,7 @@ struct GatewayHeadsUpView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.headsUp.body",
                 defaultValue: "The next steps have you run a command in a terminal on your server. You can do everything from this phone — but it's easier from a computer."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .onboardingScaledFont(.subheadline)
             .foregroundStyle(AppColors.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -78,7 +78,7 @@ struct GatewayHeadsUpView: View {
                 Text(LocalizedStringResource(
                     "gatewaySetup.headsUp.pageLead",
                     defaultValue: "Everything you'll need is on this page:"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.footnote)
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -111,7 +111,7 @@ struct GatewayHeadsUpView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.headsUp.cta",
                 defaultValue: "Got it — continue"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.headline)
                 .foregroundColor(AppColors.textEmphasis)
                 .frame(maxWidth: Constants.Layout.buttonMaxWidth)

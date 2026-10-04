@@ -61,6 +61,7 @@ struct MacGeneralCategory: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: SettingsCardMetrics.sectionSpacing) {
+                languageSection
                 launchSection
                 onLaunchSection
                 ContentSyncSettingsSection()
@@ -84,6 +85,12 @@ struct MacGeneralCategory: View {
             Task { showDockIcon = await SettingsManager.shared.getShowDockIcon() }
             Task { menuBarInputMode = await SettingsManager.shared.getMenuBarInputMode() }
             Task { speakQuickLaneReplies = await SettingsManager.shared.getSpeakQuickLaneReplies() }
+        }
+    }
+
+    private var languageSection: some View {
+        PlatformSettingsForm {
+            AppLanguageSettingsSection()
         }
     }
 
@@ -161,7 +168,7 @@ struct MacGeneralCategory: View {
         SettingsCard {
             toggleRow(
                 // Reuse the MenuBarController verbatim source string.
-                Text(String(localized: "Launch at Login")),
+                Text(String(localized: "Launch at Login", bundle: AppLocalization.bundle, locale: AppLocalization.locale)),
                 isOn: Binding(
                     get: { launchAtLogin },
                     set: { newValue in setLaunchAtLogin(newValue) }
@@ -169,19 +176,19 @@ struct MacGeneralCategory: View {
             )
 
             toggleRow(
-                Text(String(localized: "Show in Dock")),
+                Text(String(localized: "Show in Dock", bundle: AppLocalization.bundle, locale: AppLocalization.locale)),
                 isOn: Binding(
                     get: { showDockIcon },
                     set: { newValue in setShowDockIcon(newValue) }
                 )
             )
         } header: {
-            Text(LocalizedStringResource("settings.mac.general.title", defaultValue: "General"))
+            Text(LocalizedStringResource("settings.mac.general.title", defaultValue: "General", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.mac.general.showInDock.footer",
                 defaultValue: "Conduck always lives in the menu bar. Turn this on to also show a Dock icon; turn it off to run as a menu-bar-only utility."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -199,7 +206,7 @@ struct MacGeneralCategory: View {
                     // the quick ask in BOTH input modes. Key name stays internal
                     // (`quickCapture.label`); the value is spliced in the catalog —
                     // rewording `defaultValue:` alone is inert (catalog trap).
-                    title: { Text(LocalizedStringResource("settings.mac.general.shortcut.quickCapture.label", defaultValue: "Ask")) },
+                    title: { Text(LocalizedStringResource("settings.mac.general.shortcut.quickCapture.label", defaultValue: "Ask", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) },
                     icon: { Image(systemName: "command") }
                 )
                 .foregroundStyle(AppColors.textPrimary)
@@ -211,7 +218,7 @@ struct MacGeneralCategory: View {
             HStack {
                 Label(
                     // Mode-neutral + matches the feature's menu-item name.
-                    title: { Text(LocalizedStringResource("settings.mac.general.shortcut.screenshotAsk.label", defaultValue: "Screenshot & Ask")) },
+                    title: { Text(LocalizedStringResource("settings.mac.general.shortcut.screenshotAsk.label", defaultValue: "Screenshot & Ask", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) },
                     icon: { Image(systemName: "rectangle.dashed.badge.record") }
                 )
                 .foregroundStyle(AppColors.textPrimary)
@@ -225,7 +232,7 @@ struct MacGeneralCategory: View {
                     // Names the destination, not the input: ⌃⌘W records in voice
                     // mode and opens the compose surface in text mode, and the
                     // one thing true of both is where the capture lands.
-                    title: { Text(LocalizedStringResource("settings.mac.general.shortcut.captureToWork.label", defaultValue: "Capture to Work")) },
+                    title: { Text(LocalizedStringResource("settings.mac.general.shortcut.captureToWork.label", defaultValue: "Capture to Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) },
                     icon: { Image(systemName: "tray.and.arrow.down") }
                 )
                 .foregroundStyle(AppColors.textPrimary)
@@ -237,12 +244,12 @@ struct MacGeneralCategory: View {
             // Plural: three recorder rows sit under it. New wording takes a NEW
             // key — a reused one ships every existing translation of the old
             // singular against the new English.
-            Text(LocalizedStringResource("settings.mac.general.shortcuts.header", defaultValue: "Keyboard Shortcuts"))
+            Text(LocalizedStringResource("settings.mac.general.shortcuts.header", defaultValue: "Keyboard Shortcuts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.mac.general.shortcut.footerModes",
                 defaultValue: "To change a shortcut, click it and press the keys together — one or more modifiers (⌘ ⌥ ⌃ ⇧) plus one regular key. Esc always cancels the request."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -259,7 +266,7 @@ struct MacGeneralCategory: View {
             let inputModeTitle = Text(LocalizedStringResource(
                 "settings.mac.general.inputMode.label",
                 defaultValue: "Ask with"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             HStack {
                 inputModeTitle.foregroundStyle(AppColors.textPrimary)
                 Spacer()
@@ -267,11 +274,11 @@ struct MacGeneralCategory: View {
                     Text(LocalizedStringResource(
                         "settings.mac.general.inputMode.voice",
                         defaultValue: "Voice"
-                    )).tag(MenuBarInputMode.voice)
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)).tag(MenuBarInputMode.voice)
                     Text(LocalizedStringResource(
                         "settings.mac.general.inputMode.text",
                         defaultValue: "Text"
-                    )).tag(MenuBarInputMode.text)
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)).tag(MenuBarInputMode.text)
                 } label: {
                     inputModeTitle
                 }
@@ -291,7 +298,7 @@ struct MacGeneralCategory: View {
                 set: { newValue in Task { await viewModel.setSessionContinuationPolicy(newValue) } }
             )
             menuPickerRow(
-                Text(LocalizedStringResource("settings.remoteAgent.sessionPolicy.label", defaultValue: "Add to last conversation")),
+                Text(LocalizedStringResource("settings.remoteAgent.sessionPolicy.label", defaultValue: "Add to last conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 selection: policySelection
             ) {
                 ForEach(SessionContinuationPolicy.allCases.reversed()) { policy in
@@ -307,7 +314,7 @@ struct MacGeneralCategory: View {
                 Text(LocalizedStringResource(
                     "settings.quickCapture.speakReplies.label",
                     defaultValue: "Speak replies"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 isOn: Binding(
                     get: { speakQuickLaneReplies },
                     set: { newValue in
@@ -325,7 +332,7 @@ struct MacGeneralCategory: View {
                     LocalizedStringResource(
                         "settings.mac.general.menuBar.howToUse.label",
                         defaultValue: "How to Use"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "questionmark.circle"
                 )
                 .font(.body.weight(.semibold))
@@ -336,12 +343,12 @@ struct MacGeneralCategory: View {
             // `Form`'s inset content box.
             .settingsCardRowButton()
         } header: {
-            Text(LocalizedStringResource("settings.quickCapture.header.mac", defaultValue: "Menu Bar"))
+            Text(LocalizedStringResource("settings.quickCapture.header.mac", defaultValue: "Menu Bar", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.quickCapture.footer.mac",
                 defaultValue: "Last conversation: Pick a chat in the popover to override it. Spoken replies are read aloud with your Text-to-Speech voice."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -405,25 +412,25 @@ struct MacGeneralCategory: View {
                 Text(LocalizedStringResource(
                     "settings.general.onLaunch.label",
                     defaultValue: "On launch"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 selection: selection
             ) {
                 Text(LocalizedStringResource(
                     "settings.general.onLaunch.startNew",
                     defaultValue: "Start a new conversation"
-                )).tag(OnLaunchMode.startNewConversation)
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)).tag(OnLaunchMode.startNewConversation)
                 Text(LocalizedStringResource(
                     "settings.general.onLaunch.resumeLast",
                     defaultValue: "Resume last conversation"
-                )).tag(OnLaunchMode.resumeLastConversation)
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)).tag(OnLaunchMode.resumeLastConversation)
             }
         } header: {
-            Text(LocalizedStringResource("settings.general.onLaunch.header", defaultValue: "Startup"))
+            Text(LocalizedStringResource("settings.general.onLaunch.header", defaultValue: "Startup", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.general.onLaunch.footer",
                 defaultValue: "What you see when you open Conduck."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 

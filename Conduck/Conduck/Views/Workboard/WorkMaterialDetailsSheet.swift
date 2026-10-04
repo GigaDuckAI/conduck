@@ -17,15 +17,15 @@ struct WorkMaterialNotesSummary: View {
         let annotation = router.textState(for: material).annotation ?? ""
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes"))
+                Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 8)
                 Button(action: onEdit) {
                     Text(router.hasUnsavedNotes(for: material.id)
-                        ? LocalizedStringResource("workboard.material.notes.continue", defaultValue: "Continue editing…")
+                        ? LocalizedStringResource("workboard.material.notes.continue", defaultValue: "Continue editing…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                         : annotation.isEmpty
-                        ? LocalizedStringResource("workboard.material.notes.add", defaultValue: "Add notes…")
-                        : LocalizedStringResource("workboard.material.notes.edit", defaultValue: "Edit notes…"))
+                        ? LocalizedStringResource("workboard.material.notes.add", defaultValue: "Add notes…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("workboard.material.notes.edit", defaultValue: "Edit notes…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline).padding(.vertical, 6)
                 }.inlineLinkButton()
             }
@@ -62,7 +62,7 @@ struct WorkMaterialDetailsSheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     sourceContent
                     if router.hasSourceConversation(material.id) {
-                        Button(LocalizedStringResource("workboard.material.sourceConversation", defaultValue: "Open source conversation")) {
+                        Button(LocalizedStringResource("workboard.material.sourceConversation", defaultValue: "Open source conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                             router.openSourceConversation(material.id)
                         }.inlineLinkButton()
                     }
@@ -87,7 +87,7 @@ struct WorkMaterialDetailsSheet: View {
             .navigationTitle(Text(verbatim: currentMaterial.name))
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringResource("common.done", defaultValue: "Done")) { router.closeMaterial() }
+                    Button(LocalizedStringResource("common.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { router.closeMaterial() }
                         .disabled(inlineNotes?.isDirty == true || inlineNotes?.isBusy == true)
                 }
                 ToolbarItem(placement: .automatic) {
@@ -95,7 +95,7 @@ struct WorkMaterialDetailsSheet: View {
                         Button {
                             router.share.share(materialID: material.id)
                         } label: {
-                            Label(LocalizedStringResource("workboard.material.share", defaultValue: "Share"), systemImage: "square.and.arrow.up")
+                            Label(LocalizedStringResource("workboard.material.share", defaultValue: "Share", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "square.and.arrow.up")
                         }
                     }
                 }
@@ -129,8 +129,8 @@ struct WorkMaterialDetailsSheet: View {
                         editor = router.textEditor(for: material, field: .source)
                     } label: {
                         Text(material.kind == .transcript
-                            ? LocalizedStringResource("workboard.material.transcript.edit", defaultValue: "Edit transcript")
-                            : LocalizedStringResource("workboard.material.text.edit", defaultValue: "Edit text"))
+                            ? LocalizedStringResource("workboard.material.transcript.edit", defaultValue: "Edit transcript", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                            : LocalizedStringResource("workboard.material.text.edit", defaultValue: "Edit text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }.inlineLinkButton()
                 }
             }
@@ -152,11 +152,11 @@ struct WorkMaterialDetailsSheet: View {
                                 .id(url)
                                 .frame(minHeight: 300, idealHeight: 420, maxHeight: 500)
                                 .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .accessibilityLabel(Text(LocalizedStringResource("workboard.material.original.preview", defaultValue: "Preview original")))
+                                .accessibilityLabel(Text(LocalizedStringResource("workboard.material.original.preview", defaultValue: "Preview original", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                         } else if isOpening {
                             ProgressView().frame(maxWidth: .infinity, minHeight: 200)
                         } else {
-                            Button(LocalizedStringResource("common.retry", defaultValue: "Try again")) { openOriginal(material) }
+                            Button(LocalizedStringResource("common.retry", defaultValue: "Try again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { openOriginal(material) }
                                 .inlineLinkButton()
                         }
                     } else {
@@ -164,15 +164,15 @@ struct WorkMaterialDetailsSheet: View {
                             openOriginal(material)
                         } label: {
                             Text(material.kind == .link
-                                ? LocalizedStringResource("workboard.material.link.open", defaultValue: "Open link")
-                                : LocalizedStringResource("workboard.material.image.open", defaultValue: "Open image"))
+                                ? LocalizedStringResource("workboard.material.link.open", defaultValue: "Open link", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                                : LocalizedStringResource("workboard.material.image.open", defaultValue: "Open image", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                 .padding(.vertical, 6)
                         }.inlineLinkButton().disabled(isOpening)
                     }
                 } else {
                     Text(material.availability == .syncPending
                         ? ContentSyncPresentationPolicy.missingFileSummary(enabled: ContentSyncPresentationSnapshot.shared.isEnabled)
-                        : LocalizedStringResource("workboard.material.original.unavailable", defaultValue: "The original isn’t available on this device. Your notes are still available here."))
+                        : LocalizedStringResource("workboard.material.original.unavailable", defaultValue: "The original isn’t available on this device. Your notes are still available here.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.callout).foregroundStyle(AppColors.textSecondary)
                 }
             }

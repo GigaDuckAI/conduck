@@ -143,12 +143,12 @@ enum WatchWorkCaptureRefusal: Error, Equatable {
             return String(
                 localized: "watch.work.refusal.busy",
                 defaultValue: "Finish what you’re doing first, then try again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .queueFull:
             return String(
                 localized: "watch.work.refusal.queueFull",
                 defaultValue: "Work is waiting for your iPhone. Bring it nearby first."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }
@@ -1055,14 +1055,14 @@ final class WatchRecordingService {
             // xcstrings — the EXISTING key, reused verbatim. Reached whether or
             // not a default was chosen: with nothing configured the reading is
             // ambiguous (I3) and this is the sentence that fits either way.
-            return String(localized: "Set up your personal AI on iPhone first.")
+            return String(localized: "Set up your personal AI on iPhone first.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         guard chosen else {
             // Nothing to name — the iPhone has gateways and no chosen default.
             return String(localized: LocalizedStringResource(
                 "watch.capture.noDefaultGatewayNamed",
                 defaultValue: "Choose which AI new chats use, on your iPhone."
-            ))  // xcstrings
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
         }
         let name: String? = RemoteAgentRef(rawString: defaultRef).map {
             RemoteAgentRefMetadata.shortDisplayName(for: $0, customs: reader.gatewayBadgeRoster)
@@ -1071,12 +1071,12 @@ final class WatchRecordingService {
             return String(localized: LocalizedStringResource(
                 "watch.capture.defaultGatewayNotSetUp",
                 defaultValue: "\(name) isn't available. Choose which AI new chats use, on your iPhone."
-            ))  // xcstrings
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
         }
         return String(localized: LocalizedStringResource(
             "watch.capture.noDefaultGatewayNamed",
             defaultValue: "Choose which AI new chats use, on your iPhone."
-        ))  // xcstrings
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
     }
 
     // MARK: - Bound-conversation entry points (composer)
@@ -1215,7 +1215,7 @@ final class WatchRecordingService {
                 WatchLog.error(.capture, "mic.denied", ["turn": turnTag])
                 releaseSessionClaim(claim)
                 // xcstrings
-                state = .error(message: String(localized: "Microphone access is required. Please enable it in Settings."))
+                state = .error(message: String(localized: "Microphone access is required. Please enable it in Settings.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                 WatchRecordingCoordinator.shared.isRecordingFlowActive = false
                 return
             }
@@ -1321,7 +1321,7 @@ final class WatchRecordingService {
                 WatchLog.error(.capture, "recording.failed", ["turn": turnTag, "code": (error as NSError).code])
                 releaseSessionClaim(claim)
                 // xcstrings
-                state = .error(message: String(localized: "Could not start recording."))
+                state = .error(message: String(localized: "Could not start recording.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                 WatchRecordingCoordinator.shared.isRecordingFlowActive = false
             }
         }
@@ -1539,7 +1539,7 @@ final class WatchRecordingService {
         String(
             localized: "watch.work.tooShort",
             defaultValue: "That was too short to save. Try again and speak a little longer."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     // MARK: - Processing Pipeline
@@ -1547,7 +1547,7 @@ final class WatchRecordingService {
     private func processRecording() {
         guard let fileURL = recordingFileURL else {
             // xcstrings
-            state = .error(message: String(localized: "Recording file not found."))
+            state = .error(message: String(localized: "Recording file not found.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             WatchRecordingCoordinator.shared.isRecordingFlowActive = false
             return
         }
@@ -1577,7 +1577,7 @@ final class WatchRecordingService {
                 originalData = try Data(contentsOf: fileURL)
             } catch {
                 // xcstrings
-                state = .error(message: String(localized: "Could not read recording."))
+                state = .error(message: String(localized: "Could not read recording.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                 WatchRecordingCoordinator.shared.isRecordingFlowActive = false
                 return
             }
@@ -1690,7 +1690,7 @@ final class WatchRecordingService {
                         relayURL = url
                     } catch {
                         // xcstrings
-                        state = .error(message: String(localized: "Could not prepare recording for iPhone."))
+                        state = .error(message: String(localized: "Could not prepare recording for iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                         WatchRecordingCoordinator.shared.isRecordingFlowActive = false
                         return
                     }
@@ -1882,7 +1882,7 @@ final class WatchRecordingService {
                 ])
                 // xcstrings: relay-convergence fix
                 surfaceRelayVerdict(
-                    String(localized: "Sent to iPhone. Your transcript will arrive when it reconnects."),
+                    String(localized: "Sent to iPhone. Your transcript will arrive when it reconnects.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     destination: destination,
                     deferred: true
                 )
@@ -1930,7 +1930,7 @@ final class WatchRecordingService {
                 // the flag on every transition).
                 // xcstrings: relay-convergence fix
                 surfaceRelayVerdict(
-                    String(localized: "Sent to iPhone. Your transcript will arrive when it reconnects."),
+                    String(localized: "Sent to iPhone. Your transcript will arrive when it reconnects.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     destination: destination,
                     deferred: true
                 )
@@ -1987,7 +1987,7 @@ final class WatchRecordingService {
                 }
                 // xcstrings: stt-dictation-default
                 surfaceRelayVerdict(
-                    String(localized: "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up."),
+                    String(localized: "On-device voice isn't ready on your iPhone yet. Open Conduck there to set it up.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     destination: destination,
                     deferred: false
                 )
@@ -2072,7 +2072,7 @@ final class WatchRecordingService {
         String(
             localized: "watch.work.noteUnwritten",
             defaultValue: "Couldn’t add that to Work yet. It’s still on your watch."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The RELAY leg's Keychain-blackout sentence — the wrist form, naming the
@@ -2095,7 +2095,7 @@ final class WatchRecordingService {
     /// the remedy lives on a screen this one cannot reach.
     // xcstrings
     private static var relayKeyUnreadableMessage: String {
-        String(localized: "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive.")
+        String(localized: "Your iPhone couldn't read its STT API key. Unlock your iPhone and your transcript will arrive.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Copy for a TERMINAL STT failure surfaced on the wrist: the three
@@ -2176,7 +2176,7 @@ final class WatchRecordingService {
             // where re-recording genuinely can succeed.
             // xcstrings
             return error?.descriptionWithRecovery()
-                ?? String(localized: "Could not send recording. Please try again.")
+                ?? String(localized: "Could not send recording. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -2336,7 +2336,7 @@ final class WatchRecordingService {
                 state = .error(message: terminalSTTMessage(for: appError))
             } else {
                 // xcstrings
-                state = .error(message: String(localized: "Could not send recording. Please try again."))
+                state = .error(message: String(localized: "Could not send recording. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             }
             WatchRecordingCoordinator.shared.isRecordingFlowActive = false
         }
@@ -2365,7 +2365,7 @@ final class WatchRecordingService {
             self.captureGeneration += 1
             // xcstrings (existing key — same copy the delegate surfaces)
             self.handleBackgroundFailure(
-                String(localized: "Recording could not be sent. Please try again."),
+                String(localized: "Recording could not be sent. Please try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 conversationID: nil
             )
         }
@@ -2448,7 +2448,7 @@ final class WatchRecordingService {
             guard let config = WatchSettingsReader.shared.remoteAgentConfig(for: ref) else {
                 WatchLog.error(.converse, "gateway.notConfigured", ["turn": turnTag])
                 // xcstrings
-                state = .error(message: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first."))
+                state = .error(message: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                 return
             }
             let url = config.url
@@ -2575,7 +2575,7 @@ final class WatchRecordingService {
             let message = (error as? AppError)?.errorDescription
                 ?? (error as? WatchGatewayRefusal)?.message
                 ?? (error as? WorkProjectAccessError)?.errorDescription
-                ?? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.")
+                ?? String(localized: "error.unreachable.retry", defaultValue: "Couldn't reach your AI. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             state = .error(message: message)
         }
     }

@@ -22,10 +22,10 @@ enum CarPlayProjectRefusalCopy {
         switch refusal {
         case .archived:
             String(localized: "carplay.project.archived.speak",
-                   defaultValue: "This project is archived. Restore it in Work on your iPhone to continue.")  // xcstrings
+                   defaultValue: "This project is archived. Restore it in Work on your iPhone to continue.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
         case .selectionRequired:
             String(localized: "carplay.project.selectionRequired.speak",
-                   defaultValue: "Choose your active projects in Work on your iPhone to continue.")  // xcstrings
+                   defaultValue: "Choose your active projects in Work on your iPhone to continue.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
         }
     }
 

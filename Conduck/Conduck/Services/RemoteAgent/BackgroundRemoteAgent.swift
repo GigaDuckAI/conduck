@@ -2001,7 +2001,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
     /// to 40 characters. The narrow-surface rule is applied by DESTINATION, not
     /// by which process posts.
     private static func replyNotificationTitle(backendRawValue: String?) async -> String {
-        let generic = String(localized: "remoteAgent.notification.reply.title", defaultValue: "Reply from your AI")
+        let generic = String(localized: "remoteAgent.notification.reply.title", defaultValue: "Reply from your AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         guard await SettingsManager.shared.configuredRemoteAgentRefs().count >= 2,
               let raw = backendRawValue,
               let ref = RemoteAgentRef(rawString: raw) else { return generic }
@@ -2039,7 +2039,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             // the fallback states the fact the banner exists to carry and sends
             // the user to the thread, where the canonical text still lives.
             fallback: String(localized: "remoteAgent.notification.reply.emptyBody",
-                             defaultValue: "Your AI replied. Open Conduck to read it.")
+                             defaultValue: "Your AI replied. Open Conduck to read it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         )
         // One chime per BURST, not one per reply — three agents answering within
         // 30 s produce three banners and one sound. The window is App-Group
@@ -2113,7 +2113,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // hostname-free copy and passes through. Defensive: the delegate's
         // current mappings emit only fixed-copy cases, but this is the choke
         // point if a raw error is ever routed here.
-        let fallback = String(localized: "Your message wasn't delivered. Open Conduck to retry.")  // xcstrings
+        let fallback = String(localized: "Your message wasn't delivered. Open Conduck to retry.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
         switch error {
         case .some(.networkError), .some(.decodingError), .some(.unknown):
             content.body = AppError.remoteAgentUnreachable.errorDescription ?? fallback
@@ -2180,7 +2180,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         // "No reply from your personal AI" would send the user to check a
         // machine that never saw the request.
         content.title = String(localized: "remoteAgent.notification.defaultNeedsSetup.title",
-                               defaultValue: "Nothing to send to")
+                               defaultValue: "Nothing to send to", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // The REMEDY travels with the cause, on the certificate arm's argument:
         // this is a headless turn the user was not watching, the push may be the
         // only place the verdict is read for hours, and "your default isn't set
@@ -2226,11 +2226,11 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
         case .some(.remoteAgentCertUntrusted), .some(.sttCustomCertUntrusted),
              .some(.ttsCustomCertUntrusted), .some(.fileTransferCertUntrusted):
             return String(localized: "remoteAgent.notification.failure.certUntrusted.title",
-                          defaultValue: "Certificate not trusted")
+                          defaultValue: "Certificate not trusted", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .some(.remoteAgentCertMismatch), .some(.sttCustomCertMismatch),
              .some(.ttsCustomCertMismatch), .some(.fileTransferCertMismatch):
             return String(localized: "remoteAgent.notification.failure.certMismatch.title",
-                          defaultValue: "Certificate doesn't match")
+                          defaultValue: "Certificate doesn't match", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .some(.remoteAgentCertKeyUnpinnable), .some(.sttCustomCertKeyUnpinnable),
              .some(.ttsCustomCertKeyUnpinnable), .some(.fileTransferCertKeyUnpinnable):
             // Names the CHECK, never the certificate: this device trusted the
@@ -2239,7 +2239,7 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
             // mismatch title above would announce a disagreement that never
             // happened.
             return String(localized: "remoteAgent.notification.failure.certKeyUnpinnable.title",
-                          defaultValue: "Fingerprint can't be checked")
+                          defaultValue: "Fingerprint can't be checked", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // The reachability class — the only one the original title was ever
         // true for. `.networkError` / `.decodingError` / `.unknown` belong here
         // because the body above maps them to the unreachable copy, so title
@@ -2248,12 +2248,12 @@ extension BackgroundRemoteAgent: URLSessionDataDelegate {
              .some(.networkError), .some(.decodingError), .some(.unknown),
              .some(.noInternetConnection), .some(.requestTimeout),
              .some(.persistentNetworkFailure):
-            return String(localized: "remoteAgent.notification.unreachable.title", defaultValue: "Couldn't reach your AI")
+            return String(localized: "remoteAgent.notification.unreachable.title", defaultValue: "Couldn't reach your AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         default:
             // Everything the gateway ANSWERED — and the nil case, where the
             // cause is unknown and must not be guessed at.
             return String(localized: "remoteAgent.notification.failure.title.v2",
-                          defaultValue: "No reply from your AI")
+                          defaultValue: "No reply from your AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 

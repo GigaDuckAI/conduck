@@ -197,11 +197,11 @@ struct WorkbenchSectionControl: View {
         HStack(spacing: 0) {
             segment(
                 .chats,
-                title: LocalizedStringResource("workbench.chats", defaultValue: "Chats")
+                title: LocalizedStringResource("workbench.chats", defaultValue: "Chats", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
             segment(
                 .work,
-                title: LocalizedStringResource("workbench.work", defaultValue: "Work")
+                title: LocalizedStringResource("workbench.work", defaultValue: "Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
         }
         .frame(width: 160, height: controlHeight)
@@ -224,7 +224,7 @@ struct WorkbenchSectionControl: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "workbench.section",
             defaultValue: "Section"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .accessibilityIdentifier("workbench.section")
     }
 
@@ -875,7 +875,7 @@ private enum WorkbenchPreviewError: LocalizedError {
             return String(
                 localized: "workboard.material.preview.unavailable",
                 defaultValue: "This material is not available on this device. Reattach it here to open it."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .syncPending:
             return String(localized: ContentSyncPresentationPolicy.missingFileExplanation(
                 enabled: ContentSyncPresentationSnapshot.shared.isEnabled, sharing: false
@@ -1045,12 +1045,12 @@ final class PersonalWorkbenchModel {
                             ? String(localized: LocalizedStringResource(
                                 "workboard.capture.discarded.message.one",
                                 defaultValue: "Conduck couldn’t read one shared item, so it wasn’t added to your board."
-                            ))
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             : String.localizedStringWithFormat(
                                 String(localized: LocalizedStringResource(
                                     "workboard.capture.discarded.message",
                                     defaultValue: "Conduck couldn’t read %lld shared items, so they weren’t added to your board."
-                                )),
+                                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                                 Int64(report.invalidCaptureCount)
                             )
                         workboardViewModel.notice = WorkboardNotice(
@@ -1059,11 +1059,11 @@ final class PersonalWorkbenchModel {
                                 ? LocalizedStringResource(
                                     "workboard.capture.discarded.title.one",
                                     defaultValue: "Shared item not added"
-                                )
+                                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                                 : LocalizedStringResource(
                                     "workboard.capture.discarded.title",
                                     defaultValue: "Shared items not added"
-                                ),
+                                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             message: message
                         )
                         AccessibilityAnnouncer.announce(message)
@@ -1078,13 +1078,13 @@ final class PersonalWorkbenchModel {
                         let message = String(localized: LocalizedStringResource(
                             "workboard.capture.recordingRefused.message",
                             defaultValue: "Work keeps recordings only when you add them yourself. Open Work and use the attachment button."
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         workboardViewModel.notice = WorkboardNotice(
                             kind: .error,
                             title: LocalizedStringResource(
                                 "workboard.capture.recordingRefused.title",
                                 defaultValue: "Recording not added"
-                            ),
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             message: message
                         )
                         AccessibilityAnnouncer.announce(message)
@@ -1094,13 +1094,13 @@ final class PersonalWorkbenchModel {
                     let message = String(localized: LocalizedStringResource(
                         "workboard.capture.retry.message",
                         defaultValue: "Conduck couldn’t add this capture yet. Its private copy is safe and will be tried again the next time you open the app."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     workboardViewModel.notice = WorkboardNotice(
                         kind: .error,
                         title: LocalizedStringResource(
                             "workboard.capture.retry.title",
                             defaultValue: "Shared item waiting"
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         message: message
                     )
                     AccessibilityAnnouncer.announce(message)
@@ -1468,12 +1468,12 @@ struct PersonalWorkbenchView<Chats: View>: View {
                     title: Text(LocalizedStringResource(
                         "workboard.material.preview.failed.title",
                         defaultValue: "Material unavailable"
-                    )),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     message: Text(verbatim: notice.message),
                     dismissButton: .default(Text(LocalizedStringResource(
                         "common.ok",
                         defaultValue: "OK"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 )
             }
     }
@@ -1570,7 +1570,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
             // difference decides whether the colour stays inside the bar.
             TabView(selection: WorkbenchSectionToolbarItem.selectionBinding(for: model.router)) {
                 Tab(
-                    String(localized: LocalizedStringResource("workbench.chats", defaultValue: "Chats")),
+                    String(localized: LocalizedStringResource("workbench.chats", defaultValue: "Chats", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     systemImage: "bubble.left.and.bubble.right",
                     value: PersonalWorkbenchRouter.Destination.chats
                 ) {
@@ -1585,7 +1585,7 @@ struct PersonalWorkbenchView<Chats: View>: View {
                 }
 
                 Tab(
-                    String(localized: LocalizedStringResource("workbench.work", defaultValue: "Work")),
+                    String(localized: LocalizedStringResource("workbench.work", defaultValue: "Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     systemImage: "tray.full",
                     value: PersonalWorkbenchRouter.Destination.work
                 ) {
@@ -1842,7 +1842,7 @@ struct WorkShareStatusBanner: View {
                 .accessibilityHint(Text(LocalizedStringResource(
                     "workboard.material.share.dismissFailure",
                     defaultValue: "Dismisses this message"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .accessibilityFocused($failureIsFocused)
                 .onAppear { failureIsFocused = true }
             }
@@ -1913,7 +1913,7 @@ private struct WorkboardMaterialPreviewView: View {
             .navigationTitle(Text(verbatim: presentation.title))
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringResource("common.done", defaultValue: "Done"), action: onClose)
+                    Button(LocalizedStringResource("common.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), action: onClose)
                 }
             }
         }
@@ -2016,7 +2016,7 @@ private struct WorkboardGallerySheet: View {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "workboard.material.share",
                 defaultValue: "Share"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
         // The gallery's own copy of the share state. Without it a large
         // original exports behind an opaque black sheet with nothing on
@@ -2038,12 +2038,12 @@ private struct WorkboardGallerySheet: View {
                     WorkboardGalleryCompanionBand(companion: companion, player: companionPlayer)
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Button(LocalizedStringResource("workdesk.material.companionNotes", defaultValue: "Notes for attached material…")) {
+                            Button(LocalizedStringResource("workdesk.material.companionNotes", defaultValue: "Notes for attached material…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                                 transcriptEditor = router.textEditor(for: companion.material, field: .annotation)
                             }.inlineLinkButton()
                             Spacer()
                             if companion.kind == .transcript {
-                                Button(LocalizedStringResource("workboard.material.transcript.edit", defaultValue: "Edit transcript")) {
+                                Button(LocalizedStringResource("workboard.material.transcript.edit", defaultValue: "Edit transcript", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                                     transcriptEditor = router.textEditor(for: companion.material, field: .source)
                                 }.inlineLinkButton()
                             }

@@ -430,12 +430,12 @@ struct MainWindowView: View {
                                     guard chatDestinationIsActive else { return }
                                     showDeleteAllConfirmation = true
                                 } label: {
-                                    Label(String(localized: "Delete All"), systemImage: "trash")
+                                    Label(String(localized: "Delete All", bundle: AppLocalization.bundle, locale: AppLocalization.locale), systemImage: "trash")
                                 }
                                 .help(String(localized: LocalizedStringResource(
                                     "conversations.deleteAll.help",
                                     defaultValue: "Delete all conversations"
-                                )))
+                                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                                 .accessibilityIdentifier("toolbar.deleteAll")  // stable QA target (non-localized)
                             }
                             ToolbarSpacer(.flexible, placement: .primaryAction)
@@ -1085,7 +1085,7 @@ struct MainWindowView: View {
                     // because `gatewayPillBackground` draws one; no
                     // `horizontalPadding`, its 14pt inset is inside that pill.
                     .pointerIconButton(shape: .capsule)
-                    .help(String(localized: LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
+                    .help(String(localized: LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .accessibilityIdentifier("toolbar.cloneGateway")
                     .fixedSize()
                 } else {
@@ -1407,7 +1407,7 @@ struct MainWindowView: View {
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.transcriptAdded",
                 defaultValue: "Transcript added"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .failure(let error):
             // Voice hard failure (Workstream A): the missing-model case self-heals
             // upstream in `InAppAudioRecorder`; what remains is a GENUINE hard
@@ -1588,7 +1588,7 @@ struct MainWindowView: View {
                 Text(LocalizedStringResource(
                     "composer.drop.prompt",
                     defaultValue: "Drop files to attach"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.headline)
                 .foregroundStyle(AppColors.brandAmber)
                 .padding(.horizontal, 16)

@@ -18,10 +18,10 @@ import SwiftUI
 /// `PersonalAISettingsView` and the macOS `MacPersonalAICategory`.
 enum GatewayGroupCopy {
     /// "Connect" — the permanent setup-affordance section header.
-    static let connectHeader = LocalizedStringResource(
+    static var connectHeader: LocalizedStringResource { LocalizedStringResource(
         "settings.personalAI.connect.header",
         defaultValue: "Connect"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// The self-hosted built-ins (OpenClaw / Hermes), named by what is TRUE of
     /// them rather than by a category the reader has to place their own software
@@ -29,39 +29,39 @@ enum GatewayGroupCopy {
     /// run counts as a "full agent" and whether it counts as a "gateway" —
     /// before they had opened it — and set "model" and "gateway" beside each
     /// other as sibling category names for one kind of thing.
-    static let fullAgentHeader = LocalizedStringResource(
+    static var fullAgentHeader: LocalizedStringResource { LocalizedStringResource(
         "settings.personalAI.fullAgent.header.v2",
         defaultValue: "Runs on your own server"
-    )
-    static let fullAgentFooter = LocalizedStringResource(
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
+    static var fullAgentFooter: LocalizedStringResource { LocalizedStringResource(
         "settings.personalAI.fullAgent.footer",
         defaultValue: "Tools and file attachments. Conduck sends each chat's context with every message."
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// OpenRouter — the lane where the user stands nothing up.
-    static let hostedModelHeader = LocalizedStringResource(
+    static var hostedModelHeader: LocalizedStringResource { LocalizedStringResource(
         "settings.personalAI.hostedModel.header.v2",
         defaultValue: "No server needed"
-    )
-    static let hostedModelFooter = LocalizedStringResource(
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
+    static var hostedModelFooter: LocalizedStringResource { LocalizedStringResource(
         "settings.personalAI.hostedModel.footer.v2",
         defaultValue: "Conduck talks straight to the provider. No tools, no file transfer."
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// The user-defined endpoints. The one fact Conduck can assert about this
     /// bucket: the address came from the user. It is HETEROGENEOUS by
     /// construction — Ollama, LiteLLM, vLLM or a home-built adapter — so a
     /// header naming a capability would be false for some of them.
-    static let customHeader = LocalizedStringResource(
+    static var customHeader: LocalizedStringResource { LocalizedStringResource(
         "settings.personalAI.section.customHeader.v2",
         defaultValue: "You supply the address"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// Footer for the custom section — any OpenAI-compatible endpoint, including
     /// a self-built AI behind an adapter (the self-builder must recognize
     /// themselves here).
-    static let customFooter = LocalizedStringResource(
+    static var customFooter: LocalizedStringResource { LocalizedStringResource(
         "settings.personalAI.custom.footer",
         defaultValue: "Any OpenAI-compatible endpoint (LiteLLM, Ollama, vLLM…) — or an AI you built, behind a small adapter."
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 }

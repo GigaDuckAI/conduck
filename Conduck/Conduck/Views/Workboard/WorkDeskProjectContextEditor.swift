@@ -28,17 +28,17 @@ struct WorkDeskProjectContextEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(verbatim: baseline.title).font(.title2.weight(.semibold))
-                    Text(LocalizedStringResource("workdesk.project.context.explanation", defaultValue: "Background, goals and preferences to include when starting conversations in this project. Give each conversation its own task."))
+                    Text(LocalizedStringResource("workdesk.project.context.explanation", defaultValue: "Background, goals and preferences to include when starting conversations in this project. Give each conversation its own task.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.callout).foregroundStyle(AppColors.textSecondary)
                     TextField(text: $context, axis: .vertical) {
-                        Text(LocalizedStringResource("workdesk.project.context.placeholder", defaultValue: "What should your AI know about this project?"))
+                        Text(LocalizedStringResource("workdesk.project.context.placeholder", defaultValue: "What should your AI know about this project?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }
                     .lineLimit(8...20)
                     .padding(16)
                     .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12))
-                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.context.title", defaultValue: "Project context")))
+                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.context.title", defaultValue: "Project context", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .accessibilityIdentifier("workdesk-project-context-editor")
-                    Text(LocalizedStringResource("workdesk.project.context.future", defaultValue: "Changes apply to new requests. Existing conversations keep the context they received."))
+                    Text(LocalizedStringResource("workdesk.project.context.future", defaultValue: "Changes apply to new requests. Existing conversations keep the context they received.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption).foregroundStyle(AppColors.textSecondary)
                     if let errorMessage {
                         Text(verbatim: errorMessage).font(.callout).foregroundStyle(.red)
@@ -51,14 +51,14 @@ struct WorkDeskProjectContextEditor: View {
             .scrollDismissesKeyboard(.interactively)
             .disabled(isSaving)
             .background(AppColors.background)
-            .navigationTitle(Text(LocalizedStringResource("workdesk.project.context.title", defaultValue: "Project context")))
+            .navigationTitle(Text(LocalizedStringResource("workdesk.project.context.title", defaultValue: "Project context", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) { dismiss() }
+                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { dismiss() }
                         .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringResource("common.save", defaultValue: "Save")) { save() }
+                    Button(LocalizedStringResource("common.save", defaultValue: "Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { save() }
                         .disabled(isSaving)
                 }
             }

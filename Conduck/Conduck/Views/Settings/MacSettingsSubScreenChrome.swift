@@ -81,7 +81,7 @@ private struct MacSettingsSubScreenChrome: ViewModifier {
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "settings.mac.back",
                         defaultValue: "Back"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     Spacer()
                 }
             }

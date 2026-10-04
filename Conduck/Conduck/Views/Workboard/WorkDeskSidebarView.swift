@@ -40,7 +40,7 @@ struct WorkDeskSidebarView: View {
         @Bindable var workspace = workspace
         return SidebarSearchField(
             text: $workspace.search,
-            prompt: LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file"),
+            prompt: LocalizedStringResource("workdesk.search", defaultValue: "Find an idea or file", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isFocused: $workspace.searchIsFocused,
             onSubmit: {
                 workspace.searchIsFocused = false
@@ -59,7 +59,7 @@ struct WorkDeskSidebarView: View {
                 .padding(.top, searchTopInset)
                 .padding(.bottom, 8)
             if !workspace.presentsSidebarInline && workspace.isSearching {
-                Button(LocalizedStringResource("workdesk.search.show", defaultValue: "Show results")) {
+                Button(LocalizedStringResource("workdesk.search.show", defaultValue: "Show results", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     workspace.searchIsFocused = false
                     workspace.showsProjectPicker = false
                 }
@@ -68,28 +68,28 @@ struct WorkDeskSidebarView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    railRow(title: String(localized: LocalizedStringResource("workdesk.all", defaultValue: "Home")), symbol: "tray.full", scope: .all,
+                    railRow(title: String(localized: LocalizedStringResource("workdesk.all", defaultValue: "Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), symbol: "tray.full", scope: .all,
                         count: workspace.visibleMaterials(in: materials, scope: .all, search: "").count)
                     HStack {
-                        Text(LocalizedStringResource("workdesk.projects", defaultValue: "Projects"))
+                        Text(LocalizedStringResource("workdesk.projects", defaultValue: "Projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textTertiary)
                         Spacer()
                         Button {
                             workspace.beginProject()
                         } label: { Image(systemName: "plus").frame(width: 44, height: 44) }
                         .pointerIconButton(size: 44)
-                        .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.new", defaultValue: "New project")))
+                        .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.new", defaultValue: "New project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     }.padding(.leading, 12).padding(.top, 12)
                     ForEach(workspace.organization.activeProjects) { project in
                         projectNavigationRow(project, count: counts[project.id] ?? 0)
                     }
                     if workspace.organization.projects.isEmpty {
-                        Text(LocalizedStringResource("workdesk.projects.empty", defaultValue: "Bring related ideas together. Select a few cards to create your first project."))
+                        Text(LocalizedStringResource("workdesk.projects.empty", defaultValue: "Bring related ideas together. Select a few cards to create your first project.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption).foregroundStyle(AppColors.textSecondary)
                             .padding(12)
                     }
                     if !workspace.organization.archivedProjects.isEmpty {
-                        Text(LocalizedStringResource("workdesk.projects.archived", defaultValue: "Archived"))
+                        Text(LocalizedStringResource("workdesk.projects.archived", defaultValue: "Archived", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textTertiary)
                             .padding(.leading, 12).padding(.top, 18)
                         ForEach(workspace.organization.archivedProjects) { project in
@@ -118,17 +118,17 @@ struct WorkDeskSidebarView: View {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.caption).frame(width: 28, height: 40)
                     }.pointerIconButton(size: 28)
-                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.conversations.toggle", defaultValue: "Show or hide project conversations")))
-                    .accessibilityValue(Text(expanded ? LocalizedStringResource("workdesk.expanded", defaultValue: "Expanded") : LocalizedStringResource("workdesk.collapsed", defaultValue: "Collapsed")))
+                    .accessibilityLabel(Text(LocalizedStringResource("workdesk.conversations.toggle", defaultValue: "Show or hide project conversations", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
+                    .accessibilityValue(Text(expanded ? LocalizedStringResource("workdesk.expanded", defaultValue: "Expanded", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) : LocalizedStringResource("workdesk.collapsed", defaultValue: "Collapsed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 }
                 railRow(title: project.title, symbol: project.isArchived ? "archivebox" : "folder", scope: .project(project.id), count: count,
                         projectColor: project.color)
             }
             .contextMenu {
-                Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project")) { workspace.editProject(project) }
+                Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { workspace.editProject(project) }
                 WorkDeskProjectColorMenu(project: project, organization: workspace.organization)
                 WorkDeskProjectArchiveButton(project: project, organization: workspace.organization)
-                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…")) {
+                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     workspace.requestProjectDeletion(project.id)
                 }
             }
@@ -186,8 +186,8 @@ struct WorkDeskProjectArchiveButton: View {
 
     var body: some View {
         Button(project.isArchived
-            ? LocalizedStringResource("workdesk.project.restore", defaultValue: "Restore project")
-            : LocalizedStringResource("workdesk.project.archive", defaultValue: "Archive project"),
+            ? LocalizedStringResource("workdesk.project.restore", defaultValue: "Restore project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("workdesk.project.archive", defaultValue: "Archive project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                systemImage: project.isArchived ? "arrow.uturn.backward" : "archivebox") {
             Task { await organization.setProjectArchived(!project.isArchived, id: project.id) }
         }

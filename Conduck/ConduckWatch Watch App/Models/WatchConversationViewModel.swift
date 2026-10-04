@@ -246,7 +246,7 @@ final class WatchConversationViewModel {
             }
         } catch {
             // xcstrings
-            loadError = String(localized: "Couldn't load your conversations.")
+            loadError = String(localized: "Couldn't load your conversations.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         if isLoading { isLoading = false }
         return changed

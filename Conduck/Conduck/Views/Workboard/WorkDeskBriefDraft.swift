@@ -236,7 +236,7 @@ final class WorkDeskBriefDraft {
             return false
         } catch {
             persistenceError = String(localized: "workdesk.draft.saveFailed",
-                defaultValue: "This draft couldn’t save on this device. Try again before closing.")
+                defaultValue: "This draft couldn’t save on this device. Try again before closing.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return false
         }
     }
@@ -258,7 +258,7 @@ final class WorkDeskBriefDraft {
             return false
         } catch {
             persistenceError = String(localized: "workdesk.draft.clearFailed",
-                defaultValue: "This draft couldn’t be removed from this device. Try again.")
+                defaultValue: "This draft couldn’t be removed from this device. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return false
         }
     }
@@ -279,7 +279,7 @@ final class WorkDeskBriefDraft {
             return false
         } catch {
             persistenceError = String(localized: "workdesk.draft.saveFailed",
-                defaultValue: "This draft couldn’t save on this device. Try again before closing.")
+                defaultValue: "This draft couldn’t save on this device. Try again before closing.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return false
         }
     }
@@ -318,7 +318,7 @@ final class WorkDeskBriefDraft {
             return false
         } catch {
             persistenceError = String(localized: "workdesk.draft.loadFailed",
-                defaultValue: "The saved draft couldn’t open. Try again to keep your previous request.")
+                defaultValue: "The saved draft couldn’t open. Try again to keep your previous request.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return false
         }
     }
@@ -376,7 +376,7 @@ final class WorkDeskBriefDraft {
     private func reportConflict(_ conflict: WorkDeskBriefDraftStore.Conflict) {
         persistenceConflict = conflict
         persistenceError = String(localized: "workdesk.draft.conflict",
-            defaultValue: "This project’s draft changed in another window. Your request is still here. Choose which draft to keep.")
+            defaultValue: "This project’s draft changed in another window. Your request is still here. Choose which draft to keep.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     private func autosave() {
@@ -411,7 +411,7 @@ final class WorkDeskBriefDraft {
             restorationFailed = true
             isPersistenceUnavailable = true
             persistenceError = String(localized: "workdesk.draft.loadFailed",
-                defaultValue: "The saved draft couldn’t open. Try again to keep your previous request.")
+                defaultValue: "The saved draft couldn’t open. Try again to keep your previous request.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return false
         }
     }
@@ -435,7 +435,7 @@ final class WorkDeskBriefDraft {
             restorationFailed = false
             handoff.discardPreparation()
             persistenceError = String(localized: "workdesk.draft.removed",
-                defaultValue: "This draft was removed. Close it to start a new conversation.")
+                defaultValue: "This draft was removed. Close it to start a new conversation.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 

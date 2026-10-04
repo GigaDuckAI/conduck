@@ -237,7 +237,14 @@ nonisolated enum WorkboardCardFacePolicy {
     }
 
     private static var genericTitles: [String] {
-        [String(localized: "workboard.capture.note", defaultValue: "Share note")]
+        // These titles were generated when the material was captured. A
+        // language switch must not promote an older title back into the card.
+        var titles = ["Share note", String(localized: "workboard.capture.note", defaultValue: "Share note", bundle: AppLocalization.bundle, locale: AppLocalization.locale)]
+        for language in AppLanguage.allCases {
+            titles.append(AppLocalization.bundle(for: language, in: .main)
+                .localizedString(forKey: "workboard.capture.note", value: nil, table: "Localizable"))
+        }
+        return titles
     }
 
     // MARK: - Slots
@@ -254,15 +261,35 @@ nonisolated enum WorkboardCardFacePolicy {
     static func caption(from detail: String?, byteCount: Int64?) -> String? {
         guard let detail = text(detail) else { return nil }
         var derived: Set<String> = [
-            String(localized: "workboard.material.localOnly", defaultValue: "Available on this device"),
+            String(localized: "workboard.material.localOnly", defaultValue: "Available on this device", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             String(
                 localized: "workboard.material.unavailableHere",
                 defaultValue: "Reattach on this device to open"
-            ),
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             String(localized: ContentSyncPresentationPolicy.missingFileSummary(enabled: true)),
             String(localized: ContentSyncPresentationPolicy.missingFileSummary(enabled: false))
         ]
         if let size = sizeText(byteCount) { derived.insert(size) }
+        // A cached projection can predate a language switch. Strip generated
+        // metadata in every supported language, while preserving the person's
+        // caption. Legacy size projections followed the device's region.
+        let availabilityKeys = [
+            "workboard.material.localOnly", "workboard.material.unavailableHere",
+            ContentSyncPresentationPolicy.missingFileSummary(enabled: true).key,
+            ContentSyncPresentationPolicy.missingFileSummary(enabled: false).key
+        ]
+        for language in AppLanguage.allCases {
+            let bundle = AppLocalization.bundle(for: language, in: .main)
+            for key in availabilityKeys {
+                derived.insert(bundle.localizedString(forKey: key, value: nil, table: "Localizable"))
+            }
+            if let byteCount, byteCount > 0 {
+                derived.insert(byteCount.formatted(ByteCountFormatStyle(style: .file, locale: language.locale)))
+            }
+        }
+        if let byteCount, byteCount > 0 {
+            derived.insert(byteCount.formatted(ByteCountFormatStyle(style: .file, locale: .current)))
+        }
         let kept = detail
             .components(separatedBy: " • ")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -317,7 +344,7 @@ nonisolated enum WorkboardCardFacePolicy {
 
     static func sizeText(_ byteCount: Int64?) -> String? {
         guard let byteCount, byteCount > 0 else { return nil }
-        return ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
+        return AppLocalization.byteCount(byteCount, style: .file)
     }
 
     // MARK: - Availability
@@ -341,14 +368,14 @@ nonisolated enum WorkboardCardFacePolicy {
             return LocalizedStringResource(
                 "workboard.material.localOnly",
                 defaultValue: "Available on this device"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .syncPending:
             return ContentSyncPresentationPolicy.missingFileSummary(enabled: contentSyncEnabled)
         case .unavailableOnThisDevice:
             return LocalizedStringResource(
                 "workboard.material.reattach.short",
                 defaultValue: "Reattach"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

@@ -60,12 +60,12 @@ struct AppleEngineModeSection: View {
             Text(LocalizedStringResource(
                 "settings.voice.apple.engine.header.v2",
                 defaultValue: "Speech Recognition"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.voice.apple.engine.footer",
                 defaultValue: "Apple speech runs on this device. No API key, and nothing leaves your device."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -81,7 +81,7 @@ struct AppleEngineModeSection: View {
                 title: LocalizedStringResource(
                     "settings.voice.apple.engine.standard.label",
                     defaultValue: "Standard"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 active: viewModel.effectiveAppleEngine == .dictation,
                 state: standardStateLine
             )
@@ -120,7 +120,7 @@ struct AppleEngineModeSection: View {
                 title: LocalizedStringResource(
                     "settings.voice.apple.engine.higher.label",
                     defaultValue: "Higher accuracy"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 active: viewModel.effectiveAppleEngine == .highQuality,
                 state: higherAccuracyStateLine
             )
@@ -139,7 +139,7 @@ struct AppleEngineModeSection: View {
                 Text(LocalizedStringResource(
                     "settings.voice.apple.engine.higher.storage",
                     defaultValue: "~100 MB on this device"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
             }
@@ -150,7 +150,7 @@ struct AppleEngineModeSection: View {
                     Text(LocalizedStringResource(
                         "settings.voice.apple.engine.state.preparing",
                         defaultValue: "Preparing…"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                 }
@@ -161,7 +161,7 @@ struct AppleEngineModeSection: View {
             Text(LocalizedStringResource(
                 "settings.voice.apple.engine.higher.download",
                 defaultValue: "Download · ~100 MB"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(AppColors.brandAmber)
         case .failed(let message, let retryable):
@@ -200,7 +200,7 @@ struct AppleEngineModeSection: View {
             Text(LocalizedStringResource(
                 "settings.voice.apple.engine.state.ready",
                 defaultValue: "Ready"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
             .foregroundStyle(AppColors.textSecondary)
         }
@@ -212,7 +212,7 @@ struct AppleEngineModeSection: View {
             Text(LocalizedStringResource(
                 "settings.voice.apple.engine.state.preparing",
                 defaultValue: "Preparing…"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
             .foregroundStyle(AppColors.textSecondary)
         }
@@ -235,7 +235,7 @@ struct AppleEngineModeSection: View {
                 Text(LocalizedStringResource(
                     "settings.voice.apple.engine.state.tapRetry",
                     defaultValue: "Tap to try again"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.brandAmber)
             }

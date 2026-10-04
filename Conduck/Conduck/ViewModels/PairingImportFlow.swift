@@ -453,7 +453,7 @@ final class PairingImportFlow {
             inlineError = InlineError(
                 message: String(
                     format: String(localized: "settings.pairing.error.kindMismatch",
-                                   defaultValue: "This setup code is for %@. Import it from the gateway list instead."),
+                                   defaultValue: "This setup code is for %@. Import it from the gateway list instead.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     expectedDisplayName
                 ),
                 anchor: nil
@@ -746,7 +746,7 @@ final class PairingImportFlow {
             stageStatus[.save] = .failed(String(
                 localized: "settings.pairing.error.saveFailed",
                 defaultValue: "Couldn't save this configuration securely. Try again."
-            ), retryable: true)
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale), retryable: true)
             // A free-target custom import minted a roster draft in the plan step —
             // nothing persisted, so drop it (else a phantom empty row lingers in
             // the gateway list until the next state reload).
@@ -767,7 +767,7 @@ final class PairingImportFlow {
             stageStatus[.file] = .failed(String(
                 localized: "settings.pairing.error.fileCredentialFailed",
                 defaultValue: "Couldn't save the file-server credential securely. The gateway itself was set up — re-run the import to add the file server."
-            ), retryable: false)
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale), retryable: false)
         case .committed:
             saveSucceeded = true
             stageStatus[.save] = .passed(caveat: nil)
@@ -828,7 +828,7 @@ final class PairingImportFlow {
     static var uploadOnlyCaveat: String {
         String(localized: LocalizedStringResource(
             "fileTransfer.test.stage.listing.unsupported",
-            defaultValue: "This server can't list folders. Sending files to the agent works; files the agent creates can't come back on their own."))
+            defaultValue: "This server can't list folders. Sending files to the agent works; files the agent creates can't come back on their own.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// Recovery "Try again": re-run ONLY the connectivity stages on the
@@ -890,13 +890,13 @@ final class PairingImportFlow {
         switch error {
         case .notAPairingCode:
             return String(localized: "settings.pairing.error.notCode",
-                          defaultValue: "That doesn't look like a Conduck setup code.")
+                          defaultValue: "That doesn't look like a Conduck setup code.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unsupportedVersion:
             return String(localized: "settings.pairing.error.version",
-                          defaultValue: "This setup code needs a newer Conduck. Update the app, or re-run conduck-connect.")
+                          defaultValue: "This setup code needs a newer Conduck. Update the app, or re-run conduck-connect.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .malformed:
             return String(localized: "settings.pairing.error.malformed",
-                          defaultValue: "This setup code is damaged or incomplete. Re-run conduck-connect to get a fresh one.")
+                          defaultValue: "This setup code is damaged or incomplete. Re-run conduck-connect to get a fresh one.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .insecureURL:
             // FIRST SENTENCE VERBATIM from the typed-address refusal
             // (`SettingsViewModel.plainHTTPRemoteMessage`) — one cause, one
@@ -909,7 +909,7 @@ final class PairingImportFlow {
             // string (`.v3` because the `.v2` wording said "iOS" — wrong on
             // the Mac).
             return String(localized: "settings.pairing.error.insecureURL.v3",
-                          defaultValue: "Apple allows plain http:// only to an address on your own network. Re-run conduck-connect with the server's IP address, or put it behind https://.")
+                          defaultValue: "Apple allows plain http:// only to an address on your own network. Re-run conduck-connect with the server's IP address, or put it behind https://.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 

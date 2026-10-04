@@ -72,7 +72,7 @@ struct GatewaySetupForkView: View {
         let template = String(localized: LocalizedStringResource(
             "gatewaySetup.fork.title.named",
             defaultValue: "Connect %@"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         return Text(verbatim: String(format: template, gatewayName))
     }
 

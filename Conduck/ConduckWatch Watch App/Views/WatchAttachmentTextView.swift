@@ -64,7 +64,7 @@ struct WatchAttachmentTextView: View {
                             Text(LocalizedStringResource(
                                 "watch.attachment.snapshot.caption",
                                 defaultValue: "Saved copy from when this reply arrived"
-                            ))  // xcstrings
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -79,7 +79,7 @@ struct WatchAttachmentTextView: View {
                 Text(LocalizedStringResource(
                     "watch.attachment.missing",
                     defaultValue: "This file is no longer available."
-                ))  // xcstrings
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))  // xcstrings
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -106,7 +106,7 @@ struct WatchAttachmentTextView: View {
         let title = attachment.filename ?? String(localized: LocalizedStringResource(
             "watch.attachment.untitled",
             defaultValue: "Attached file"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         // Inline text file: the decoded bytes ride the snapshot directly.
         if let text = attachment.extractedText {
             WatchLog.info(.nav, "attachment.view", ["found": true, "preview": false])

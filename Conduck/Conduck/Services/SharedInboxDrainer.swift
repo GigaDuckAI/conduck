@@ -1862,20 +1862,20 @@ actor SharedInboxDrainer {
             content.title = String(
                 localized: "Couldn't send your file",
                 defaultValue: "Couldn't send your file"
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             content.body = String(
                 localized: "This gateway has no file server set up, so your file couldn't be sent. Add one in Settings, then share it again.",
                 defaultValue: "This gateway has no file server set up, so your file couldn't be sent. Add one in Settings, then share it again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .couldNotSend:
             content.title = String(
                 localized: "Couldn't send",
                 defaultValue: "Couldn't send"
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             content.body = String(
                 localized: "Conduck couldn't send what you shared. Try sharing it again.",
                 defaultValue: "Conduck couldn't send what you shared. Try sharing it again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         content.sound = .default
         // Empty conversation id → the delegate no-ops to foreground (no thread).

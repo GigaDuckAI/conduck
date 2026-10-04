@@ -213,6 +213,7 @@ struct ConduckWatchApp: App {
                     WatchSetupView()
                 }
             }
+            .environment(\.locale, AppLanguageStore.shared.language.locale)
             .task { ProSubscriptionStore.shared.start() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { Task { await ProSubscriptionStore.shared.refresh() } }

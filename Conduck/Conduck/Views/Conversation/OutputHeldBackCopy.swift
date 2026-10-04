@@ -104,7 +104,7 @@ nonisolated enum OutputHeldBackCopy {
             return [
                 LocalizedStringResource(
                     "thread.outputs.heldBack.ceiling",
-                    defaultValue: "^[\(count) more file](inflect: true) stayed in the folder."),
+                    defaultValue: "^[\(count) more file](inflect: true) stayed in the folder.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 admitsMoreChips(message)
                     // A SLOT IS FREE, so one more of them can still land here —
                     // which is exactly what the verb beside this line does. The
@@ -112,7 +112,7 @@ nonisolated enum OutputHeldBackCopy {
                     // part claimed.
                     ? LocalizedStringResource(
                         "thread.outputs.heldBack.ceiling.partial",
-                        defaultValue: "Conduck can't fit them all on this reply — checking again brings back what still fits, and the rest stay on your file server.")
+                        defaultValue: "Conduck can't fit them all on this reply — checking again brings back what still fits, and the rest stay on your file server.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     // NO SLOT LEFT, so the folder lane adds nothing further to
                     // this message and these entries are where they stay. The
                     // claim is about THESE files rather than about the reply,
@@ -121,12 +121,12 @@ nonisolated enum OutputHeldBackCopy {
                     // root, and that is a different file in a different place.
                     : LocalizedStringResource(
                         "thread.outputs.heldBack.ceiling.full",
-                        defaultValue: "Conduck can't bring these back to this reply — they're still on your file server."),
+                        defaultValue: "Conduck can't bring these back to this reply — they're still on your file server.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             ]
         case .batching(let count):
             return [LocalizedStringResource(
                 "thread.outputs.heldBack.more",
-                defaultValue: "^[\(count) more file](inflect: true) stayed in the folder. Conduck brings back a batch at a time and picks up more each time it checks this reply.")]
+                defaultValue: "^[\(count) more file](inflect: true) stayed in the folder. Conduck brings back a batch at a time and picks up more each time it checks this reply.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)]
         case .unattributed(let count):
             // NEITHER PROMISE. This row was written without its cause, so the
             // app knows a remainder existed and nothing about whether it can
@@ -134,7 +134,7 @@ nonisolated enum OutputHeldBackCopy {
             // either way.
             return [LocalizedStringResource(
                 "thread.outputs.heldBack.more.unknown",
-                defaultValue: "^[\(count) more file](inflect: true) stayed in the folder. Conduck can't tell whether checking again brings it back; it's still on your file server either way.")]
+                defaultValue: "^[\(count) more file](inflect: true) stayed in the folder. Conduck can't tell whether checking again brings it back; it's still on your file server either way.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)]
         }
     }
 
@@ -270,7 +270,7 @@ nonisolated enum OutputHeldBackCopy {
             // user can send to their own agent.
             return LocalizedStringResource(
                 "thread.outputs.heldBack.shape.overlong",
-                defaultValue: "Conduck left ^[\(count) file](inflect: true) alone because the name is longer than it can address. A shorter name comes back normally.")
+                defaultValue: "Conduck left ^[\(count) file](inflect: true) alone because the name is longer than it can address. A shorter name comes back normally.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .whitespaceBounded(let count):
             // THE SECOND BENIGN ONE, and the sentence names the space rather
             // than hedging to "whitespace": the guard that produced this class
@@ -286,7 +286,7 @@ nonisolated enum OutputHeldBackCopy {
             // "comes back normally" promise false. Asking is true either way.
             return LocalizedStringResource(
                 "thread.outputs.heldBack.shape.spaced",
-                defaultValue: "Conduck left ^[\(count) file](inflect: true) alone because the name starts or ends with a space. Ask your agent for the same name without it.")
+                defaultValue: "Conduck left ^[\(count) file](inflect: true) alone because the name starts or ends with a space. Ask your agent for the same name without it.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .unusable(let count):
             // The two mechanisms named are the real ones the REMAINING guards
             // test for — a separator or a `..` that reads as an instruction, a
@@ -297,7 +297,7 @@ nonisolated enum OutputHeldBackCopy {
             // shown to.
             return LocalizedStringResource(
                 "thread.outputs.heldBack.shape.unusable",
-                defaultValue: "Conduck left ^[\(count) file](inflect: true) alone because of how the name is written — a name other software could read as an instruction, or one that hides itself from a listing. There's nothing to review.")
+                defaultValue: "Conduck left ^[\(count) file](inflect: true) alone because of how the name is written — a name other software could read as an instruction, or one that hides itself from a listing. There's nothing to review.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

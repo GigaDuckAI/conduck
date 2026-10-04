@@ -37,7 +37,7 @@ struct WorkboardTextMaterialSheet: View {
                         String(localized: LocalizedStringResource(
                             "workboard.material.link.url",
                             defaultValue: "https://example.com"
-                        )),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                         text: $value
                     )
                     .textContentType(.URL)
@@ -47,7 +47,7 @@ struct WorkboardTextMaterialSheet: View {
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "workboard.material.link.url.label",
                         defaultValue: "Web address"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     #if os(iOS)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
@@ -62,29 +62,29 @@ struct WorkboardTextMaterialSheet: View {
                     Text(LocalizedStringResource(
                         "workboard.material.link.title",
                         defaultValue: "Reference Link"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .accessibilityAddTraits(.isHeader)
                 } footer: {
                     Text(LocalizedStringResource(
                         "workboard.material.link.footer",
                         defaultValue: "The address is saved as text. Conduck does not fetch the page in the background."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle(LocalizedStringResource(
                 "workboard.material.addLink",
                 defaultValue: "Add Link"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .workboardInlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         dismiss()
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringResource("common.add", defaultValue: "Add"), action: add)
+                    Button(LocalizedStringResource("common.add", defaultValue: "Add", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), action: add)
                         .disabled(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -97,7 +97,7 @@ struct WorkboardTextMaterialSheet: View {
         LocalizedStringResource(
             "workboard.material.link.name",
             defaultValue: "Link name (optional)"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     private func add() {
@@ -110,12 +110,12 @@ struct WorkboardTextMaterialSheet: View {
             validationMessage = LocalizedStringResource(
                 "workboard.material.link.invalid",
                 defaultValue: "Enter a complete http or https address."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             focusedField = .value
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "workboard.material.link.invalid",
                 defaultValue: "Enter a complete http or https address."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             return
         }
         onAdd(WorkboardMaterialImport(

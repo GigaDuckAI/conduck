@@ -156,12 +156,12 @@ private struct WorkDeskObjectDragModifier: ViewModifier {
                 isFocused = false
                 if dragState.release() { onCancelled() }
             }
-            .help(Text(LocalizedStringResource("workdesk.canvas.moveObjectHint", defaultValue: "Drag anywhere on a card to arrange your desk")))
+            .help(Text(LocalizedStringResource("workdesk.canvas.moveObjectHint", defaultValue: "Drag anywhere on a card to arrange your desk", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .accessibilityActions {
-                Button(LocalizedStringResource("workdesk.canvas.moveLeft", defaultValue: "Move left")) { nudge(.leftArrow) }
-                Button(LocalizedStringResource("workdesk.canvas.moveRight", defaultValue: "Move right")) { nudge(.rightArrow) }
-                Button(LocalizedStringResource("workdesk.canvas.moveUp", defaultValue: "Move up")) { nudge(.upArrow) }
-                Button(LocalizedStringResource("workdesk.canvas.moveDown", defaultValue: "Move down")) { nudge(.downArrow) }
+                Button(LocalizedStringResource("workdesk.canvas.moveLeft", defaultValue: "Move left", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { nudge(.leftArrow) }
+                Button(LocalizedStringResource("workdesk.canvas.moveRight", defaultValue: "Move right", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { nudge(.rightArrow) }
+                Button(LocalizedStringResource("workdesk.canvas.moveUp", defaultValue: "Move up", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { nudge(.upArrow) }
+                Button(LocalizedStringResource("workdesk.canvas.moveDown", defaultValue: "Move down", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { nudge(.downArrow) }
             }
             .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .escape]) { press in
                 guard isEnabled, isFocused,

@@ -1476,10 +1476,10 @@ final class ReplyVoice: SpeakEngine {
 
     /// Fixed sample sentence for the Settings "Speak a sample" preview. Short,
     /// neutral, exercises prosody. English-only (V1 localization scope).
-    private static let sampleText = String(
+    private static var sampleText: String { String(
         localized: "tts.sample",
         defaultValue: "This is how your replies will sound."
-    )
+    , bundle: AppLocalization.bundle, locale: AppLocalization.locale) }
 }
 
 // MARK: - Terminal spoken-voice refusal (the one user-visible verdict)

@@ -139,7 +139,7 @@ private struct BufferedEditorChrome: ViewModifier {
             ? Text(LocalizedStringResource(
                 "settings.editor.save.noChanges",
                 defaultValue: "No changes to save."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             : Text("")
     }
 
@@ -159,9 +159,9 @@ private struct BufferedEditorChrome: ViewModifier {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "settings.mac.back",
                 defaultValue: "Back"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .cancel:
-            Button(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel")) {
+            Button(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 handleExit()
             }
         }
@@ -194,25 +194,25 @@ private struct BufferedEditorChrome: ViewModifier {
                 Task { await onDiscard() }
             }
             .alert(
-                LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?"),
+                LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 isPresented: $showingDiscardConfirm
             ) {
                 Button(
-                    LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard"),
+                    LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     role: .destructive
                 ) {
                     // `.onDisappear` runs the discard cleanup; just leave.
                     dismiss()
                 }
                 Button(
-                    LocalizedStringResource("settings.editor.discard.keepEditing", defaultValue: "Keep Editing"),
+                    LocalizedStringResource("settings.editor.discard.keepEditing", defaultValue: "Keep Editing", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     role: .cancel
                 ) { }
             } message: {
                 Text(LocalizedStringResource(
                     "settings.editor.discard.message",
                     defaultValue: "Your unsaved changes will be lost."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
     }
 

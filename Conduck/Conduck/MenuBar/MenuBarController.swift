@@ -130,7 +130,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             },
             dismiss: { [weak self] in self?.dismissPopover() }
         )
-        popover.contentViewController = NSHostingController(rootView: popoverView)
+        popover.contentViewController = NSHostingController(rootView: popoverView.appLanguageEnvironment())
         popover.delegate = self
         popover.behavior = .transient
 
@@ -797,6 +797,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func observeStateChanges() {
         func observe() {
             withObservationTracking {
+                _ = AppLanguageStore.shared.language
                 _ = dictationService.state
                 _ = coordinator.quickViewModel?.isAwaitingReply
                 // Both derived from the stored rows, so this also picks up a
@@ -903,10 +904,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             switch coordinator.workVoiceRecorder.state {
             case .recording:
                 button.image = NSImage(systemSymbolName: "record.circle.fill",
-                                       accessibilityDescription: String(localized: "Recording"))
+                                       accessibilityDescription: String(localized: "Recording", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             default:
                 button.image = NSImage(systemSymbolName: "ellipsis.circle.fill",
-                                       accessibilityDescription: String(localized: "Transcribing"))
+                                       accessibilityDescription: String(localized: "Transcribing", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             }
             // No dots over a busy icon (same rule as every non-idle state
             // below): they narrate settled chat replies, not a capture in hand.
@@ -918,18 +919,18 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         switch dictationService.state {
         case .recording:
             button.image = NSImage(systemSymbolName: "record.circle.fill",
-                                   accessibilityDescription: String(localized: "Recording"))
+                                   accessibilityDescription: String(localized: "Recording", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .processing:
             button.image = NSImage(systemSymbolName: "ellipsis.circle.fill",
-                                   accessibilityDescription: String(localized: "Transcribing"))
+                                   accessibilityDescription: String(localized: "Transcribing", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .error:
             button.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
-                                   accessibilityDescription: String(localized: "Error"))
+                                   accessibilityDescription: String(localized: "Error", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .idle:
             if isAwaitingReply {
                 // 6th state — agent reply in flight.
                 button.image = NSImage(systemSymbolName: "sparkles",
-                                       accessibilityDescription: String(localized: "Waiting for reply"))
+                                       accessibilityDescription: String(localized: "Waiting for reply", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             } else {
                 applyIdleIcon(to: button)
             }
@@ -1030,7 +1031,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             button.setAccessibilityLabel(String(localized: LocalizedStringResource(
                 "menubar.replyReady",
                 defaultValue: "Reply ready"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             if wasHidden { pulseBadge(badge) }
         } else if failureBadge?.isHidden ?? true {
             // Only clear the shared label when the OTHER (failure) badge isn't
@@ -1091,7 +1092,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             button.setAccessibilityLabel(String(localized: LocalizedStringResource(
                 "menubar.sendFailed",
                 defaultValue: "Send failed"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             if wasHidden { pulseBadge(badge) }
         } else if unreadBadge?.isHidden ?? true {
             // Symmetric to `updateUnreadBadge`: only clear the shared label when
@@ -1127,7 +1128,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 title: String(localized: LocalizedStringResource(
                     "menu.typeMessage",
                     defaultValue: "Type a Message…"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 action: #selector(openPopoverForTyping),
                 keyEquivalent: ""
             )
@@ -1139,7 +1140,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 title: String(localized: LocalizedStringResource(
                     "menu.startRecording",
                     defaultValue: "Start Recording"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 action: #selector(startRecordingFromMenu),
                 keyEquivalent: ""
             )
@@ -1151,7 +1152,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             title: String(localized: LocalizedStringResource(
                 "menu.screenshotAndAsk",
                 defaultValue: "Screenshot & Ask…"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: #selector(screenshotAndAskFromMenu),
             // No responder-chain key-equivalent (mirrors `recordItem`): the global
             // ⌘⇧2 is owned by KeyboardShortcuts. A live menu key-equivalent could
@@ -1169,7 +1170,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             title: String(localized: LocalizedStringResource(
                 "menu.captureToWork",
                 defaultValue: "Capture to Work…"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: #selector(captureToWorkFromMenu),
             // No responder-chain key-equivalent, same as its two neighbours:
             // ⌃⌘W is owned by KeyboardShortcuts, and a live menu equivalent
@@ -1189,7 +1190,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             title: String(localized: LocalizedStringResource(
                 "conversations.openConversations",
                 defaultValue: "Open Conversations"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: #selector(openConversationsFromMenu),
             keyEquivalent: ""
         )
@@ -1205,7 +1206,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             title: String(localized: LocalizedStringResource(
                 "menu.openWorkDesk",
                 defaultValue: "Open Work"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: #selector(openWorkFromMenu),
             keyEquivalent: ""
         )
@@ -1215,7 +1216,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         menu.addItem(.separator())
 
         let loginItem = NSMenuItem(
-            title: String(localized: "Launch at Login"),
+            title: String(localized: "Launch at Login", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             action: #selector(toggleLaunchAtLogin(_:)),
             keyEquivalent: ""
         )
@@ -1227,7 +1228,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // xcstrings key, no collision). Checkmark reflects the current pref via
         // the synchronous launch-path read; toggling persists + applies live.
         let dockItem = NSMenuItem(
-            title: String(localized: "Show in Dock"),
+            title: String(localized: "Show in Dock", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             action: #selector(toggleShowInDock(_:)),
             keyEquivalent: ""
         )
@@ -1243,7 +1244,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             title: String(localized: LocalizedStringResource(
                 "menu.settings",
                 defaultValue: "Settings…"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: #selector(openSettings),
             keyEquivalent: ","
         )
@@ -1253,7 +1254,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
-            title: String(localized: "Quit Conduck"),
+            title: String(localized: "Quit Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             action: #selector(quitApp),
             keyEquivalent: "q"
         )

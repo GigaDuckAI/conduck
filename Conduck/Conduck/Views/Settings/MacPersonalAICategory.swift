@@ -51,7 +51,7 @@ struct MacPersonalAICategory: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(LocalizedStringResource("settings.mac.personalAI.title", defaultValue: "Personal AI"))
+                    Text(LocalizedStringResource("settings.mac.personalAI.title", defaultValue: "Personal AI", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.title2.weight(.semibold))
                         .foregroundStyle(AppColors.textEmphasis)
                         .padding(.horizontal, 28)
@@ -197,7 +197,7 @@ struct MacPersonalAICategory: View {
             Text(LocalizedStringResource(
                 "settings.personalAI.newChats.header",
                 defaultValue: "New chats use"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             InfoTipButton(tip: GatewayFieldTips.defaultForNewChats)
         }
     }
@@ -215,13 +215,13 @@ struct MacPersonalAICategory: View {
             return String(localized: LocalizedStringResource(
                 "settings.personalAI.default.unavailable.footer.mac",
                 defaultValue: "\(name) isn't available on this Mac, so anything that starts a chat from outside the app has nowhere to go. It'll work again on its own if it's waiting on iCloud — or pick a gateway that works here."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         if viewModel.defaultSelectorNeedsChoice {
             return String(localized: LocalizedStringResource(
                 "settings.personalAI.default.noChoice.footer.mac",
                 defaultValue: "Nothing that starts a chat from outside this Mac knows which gateway to use. Pick one and new chats will start on it."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         return nil
     }
@@ -315,7 +315,7 @@ struct MacPersonalAICategory: View {
                     // labelling it would advertise the same phantom default the
                     // selector's empty-set guard exists to kill.
                     caption: row.isDefault && viewModel.hasAnyConfiguredRemoteAgent
-                        ? LocalizedStringResource("settings.remoteAgent.list.pill.default", defaultValue: "Default")
+                        ? LocalizedStringResource("settings.remoteAgent.list.pill.default", defaultValue: "Default", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                         : nil
                 )
                 Image(systemName: "chevron.right")
@@ -343,8 +343,8 @@ struct MacPersonalAICategory: View {
             } label: {
                 Label {
                     Text(canAdd
-                        ? LocalizedStringResource("settings.remoteAgent.customGateway.add.v2", defaultValue: "Set up a custom server")
-                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap.v2", defaultValue: "Set up a custom server with Pro"))
+                        ? LocalizedStringResource("settings.remoteAgent.customGateway.add.v2", defaultValue: "Set up a custom server", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("settings.remoteAgent.customGateway.addAtCap.v2", defaultValue: "Set up a custom server with Pro", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 } icon: {
                     Image(systemName: "plus.circle.fill")
                         .foregroundStyle(canAdd ? AppColors.brandAmber : AppColors.textTertiary)

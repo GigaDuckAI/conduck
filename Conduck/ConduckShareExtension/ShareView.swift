@@ -482,8 +482,7 @@ struct ShareView: View {
         // `.binary` (1024-based) so the sheet's size matches the wire notes'
         // `WebPageCapture.formatKB` (also 1024-based) — `.file` (1000-based) would
         // disagree with the truncation note the agent receives.
-        let size = ByteCountFormatter.string(
-            fromByteCount: Int64(payload.returnedByteCount), countStyle: .binary)
+        let size = AppLocalization.byteCount(Int64(payload.returnedByteCount), style: .binary)
         return payload.truncated ? "\(size) · \(Strings.captureTruncated)" : size
     }
 
@@ -989,17 +988,18 @@ struct ShareView: View {
         return String(first).uppercased()
     }
 
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
+    private static var relativeFormatter: RelativeDateTimeFormatter {
         let f = RelativeDateTimeFormatter()
+        f.locale = AppLocalization.locale
         f.unitsStyle = .abbreviated
         return f
-    }()
+    }
 
     /// "+N more" suffix for a multi-attachment share's secondary header line.
     private func moreSummary(extra: Int) -> String {
         String(
             localized: "share.summary.more",
-            defaultValue: "+\(extra) more",
+            defaultValue: "+\(extra) more", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
             comment: "Suffix on the share header when more than one item is shared (+n more)"
         )
     }
@@ -1007,98 +1007,98 @@ struct ShareView: View {
     // MARK: - Localized strings (inline defaults → the appex carries no catalog)
 
     private enum Strings {
-        static let title = String(localized: "share.destination.title",
-            defaultValue: "Where to?",
-            comment: "Share Extension navigation title over the destination list (gateways and recent chats)")
-        static let noAIWork = String(localized: "share.destination.noAI.work",
-            defaultValue: "No personal AI available. You can still add this to Work.",
-            comment: "Shown in place of the gateway rows when the snapshot lists no configured gateway and no recent chat; Add to Work stays available on the floor")
-        static let nothingSent = String(localized: "share.work.inert",
-            defaultValue: "Nothing is sent to AI",
-            comment: "Caption under the Add to Work button on the share sheet's floor, and that button's accessibility hint — privacy reassurance for an inert Work capture")
-        static let cancel = String(localized: "share.cancel",
-            defaultValue: "Cancel",
-            comment: "Cancel button in the Share Extension")
-        static let sendNow = String(localized: "share.sendNow",
-            defaultValue: "Send now",
-            comment: "Immediate dispatch button in the Share Extension")
+        static var title: String { String(localized: "share.destination.title",
+            defaultValue: "Where to?", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Share Extension navigation title over the destination list (gateways and recent chats)") }
+        static var noAIWork: String { String(localized: "share.destination.noAI.work",
+            defaultValue: "No personal AI available. You can still add this to Work.", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Shown in place of the gateway rows when the snapshot lists no configured gateway and no recent chat; Add to Work stays available on the floor") }
+        static var nothingSent: String { String(localized: "share.work.inert",
+            defaultValue: "Nothing is sent to AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Caption under the Add to Work button on the share sheet's floor, and that button's accessibility hint — privacy reassurance for an inert Work capture") }
+        static var cancel: String { String(localized: "share.cancel",
+            defaultValue: "Cancel", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Cancel button in the Share Extension") }
+        static var sendNow: String { String(localized: "share.sendNow",
+            defaultValue: "Send now", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Immediate dispatch button in the Share Extension") }
         static func sendTo(_ name: String) -> String {
             String(localized: "share.send.to",
-                defaultValue: "Send to \(name)",
+                defaultValue: "Send to \(name)", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
                 comment: "Primary share button naming the picked destination (a gateway's name for a new conversation, or a chat's title)")
         }
-        static let addToWorkboard = String(localized: "share.addToWork",
-            defaultValue: "Add to Work",
-            comment: "Primary button that saves shared material as inert Work")
-        static let addingToWorkboard = String(localized: "share.addToWork.progress",
-            defaultValue: "Adding to Work…",
-            comment: "Progress label while the Share Extension saves inert Work")
-        static let sending = String(localized: "share.send.progress",
-            defaultValue: "Sending…",
-            comment: "Progress label while the Share Extension queues a conversation send")
-        static let workboardErrorTitle = String(localized: "share.work.error.title",
-            defaultValue: "Couldn’t Add to Work",
-            comment: "Title shown when the Share Extension cannot persist a Work capture")
-        static let workboardErrorUnavailable = String(localized: "share.work.error.unavailable",
-            defaultValue: "Nothing was saved. Check that your device has free storage, then try again.",
-            comment: "Actionable generic Workboard persistence failure message in the Share Extension")
-        static let workboardErrorTooLarge = String(localized: "share.work.error.tooLarge",
-            defaultValue: "This share is too large for Work. Share fewer files or smaller files, then try again.",
-            comment: "Actionable size-limit failure message for a Workboard capture")
-        static let workboardErrorEmpty = String(localized: "share.work.error.empty",
-            defaultValue: "There’s nothing to add yet. Add a message or include at least one shared item, then try again.",
-            comment: "Actionable empty Workboard capture failure message")
-        static let workboardErrorUnsupportedItem = String(localized: "share.work.error.unsupportedItem",
-            defaultValue: "Folders and package documents can’t be added to Work. Share the files inside them instead.",
-            comment: "Non-retryable failure message when a shared item is not a regular file")
-        static let workboardErrorAudioRefused = String(localized: "share.work.error.audioRefused",
-            defaultValue: "Recordings can’t be shared into Work. To keep one, open Work and add it with the attachment button.",
-            comment: "Non-retryable failure message when a share bound for Work carries a recording")
-        static let workboardErrorInvalidContent = String(localized: "share.work.error.invalidContent",
-            defaultValue: "Something in this share can’t be saved to Work. Share it a different way, or share fewer items.",
-            comment: "Non-retryable failure message when a share breaks the Work capture contract")
-        static let retry = String(localized: "share.retry",
-            defaultValue: "Try Again",
-            comment: "Retry button after a Share Extension persistence failure")
-        static let captionPlaceholder = String(localized: "share.caption.placeholder",
-            defaultValue: "Add a message…",
-            comment: "Placeholder for the caption field in the Share Extension")
-        static let searchPlaceholder = String(localized: "share.search.placeholder",
-            defaultValue: "Search",
-            comment: "Placeholder for the target-search field in the Share Extension")
-        static let searchEmpty = String(localized: "share.search.empty",
-            defaultValue: "No matches",
-            comment: "Empty state shown when a Share Extension target search matches nothing")
-        static let clearSearch = String(localized: "share.search.clear",
-            defaultValue: "Clear search",
-            comment: "Accessibility label for the clear-search button in the Share Extension")
-        static let newConversation = String(localized: "share.target.newConversation",
-            defaultValue: "New conversation",
-            comment: "Picker row that starts a brand-new conversation")
-        static let sectionNew = String(localized: "share.section.new",
-            defaultValue: "New conversation",
-            comment: "Picker section header above the new-conversation gateway rows")
-        static let sectionRecent = String(localized: "share.section.recent",
-            defaultValue: "Recent chats",
-            comment: "Picker section header above the recent-conversation rows")
-        static let untitledChat = String(localized: "share.target.untitled",
-            defaultValue: "Conversation",
-            comment: "Fallback label for a recent chat with no title")
-        static let itemFallback = String(localized: "share.item.fallback",
-            defaultValue: "Shared item",
-            comment: "Generic fallback label when a shared item has no resolvable name")
-        static let capturePage = String(localized: "share.capture.page",
-            defaultValue: "Page text",
-            comment: "Title of the Share Extension row that toggles including the captured full-page text")
-        static let captureSelection = String(localized: "share.capture.selection",
-            defaultValue: "Selected text",
-            comment: "Title of the Share Extension capture row when the user had text selected (the selection is captured instead of the whole page)")
-        static let captureTruncated = String(localized: "share.capture.truncated",
-            defaultValue: "truncated",
-            comment: "Suffix on the captured-text size when the capture was cut at the size cap")
-        static let captureToggleA11y = String(localized: "share.capture.toggleA11y",
-            defaultValue: "Include page text",
-            comment: "Accessibility label for the toggle that includes or excludes the captured page text")
+        static var addToWorkboard: String { String(localized: "share.addToWork",
+            defaultValue: "Add to Work", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Primary button that saves shared material as inert Work") }
+        static var addingToWorkboard: String { String(localized: "share.addToWork.progress",
+            defaultValue: "Adding to Work…", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Progress label while the Share Extension saves inert Work") }
+        static var sending: String { String(localized: "share.send.progress",
+            defaultValue: "Sending…", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Progress label while the Share Extension queues a conversation send") }
+        static var workboardErrorTitle: String { String(localized: "share.work.error.title",
+            defaultValue: "Couldn’t Add to Work", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Title shown when the Share Extension cannot persist a Work capture") }
+        static var workboardErrorUnavailable: String { String(localized: "share.work.error.unavailable",
+            defaultValue: "Nothing was saved. Check that your device has free storage, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Actionable generic Workboard persistence failure message in the Share Extension") }
+        static var workboardErrorTooLarge: String { String(localized: "share.work.error.tooLarge",
+            defaultValue: "This share is too large for Work. Share fewer files or smaller files, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Actionable size-limit failure message for a Workboard capture") }
+        static var workboardErrorEmpty: String { String(localized: "share.work.error.empty",
+            defaultValue: "There’s nothing to add yet. Add a message or include at least one shared item, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Actionable empty Workboard capture failure message") }
+        static var workboardErrorUnsupportedItem: String { String(localized: "share.work.error.unsupportedItem",
+            defaultValue: "Folders and package documents can’t be added to Work. Share the files inside them instead.", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Non-retryable failure message when a shared item is not a regular file") }
+        static var workboardErrorAudioRefused: String { String(localized: "share.work.error.audioRefused",
+            defaultValue: "Recordings can’t be shared into Work. To keep one, open Work and add it with the attachment button.", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Non-retryable failure message when a share bound for Work carries a recording") }
+        static var workboardErrorInvalidContent: String { String(localized: "share.work.error.invalidContent",
+            defaultValue: "Something in this share can’t be saved to Work. Share it a different way, or share fewer items.", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Non-retryable failure message when a share breaks the Work capture contract") }
+        static var retry: String { String(localized: "share.retry",
+            defaultValue: "Try Again", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Retry button after a Share Extension persistence failure") }
+        static var captionPlaceholder: String { String(localized: "share.caption.placeholder",
+            defaultValue: "Add a message…", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Placeholder for the caption field in the Share Extension") }
+        static var searchPlaceholder: String { String(localized: "share.search.placeholder",
+            defaultValue: "Search", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Placeholder for the target-search field in the Share Extension") }
+        static var searchEmpty: String { String(localized: "share.search.empty",
+            defaultValue: "No matches", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Empty state shown when a Share Extension target search matches nothing") }
+        static var clearSearch: String { String(localized: "share.search.clear",
+            defaultValue: "Clear search", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Accessibility label for the clear-search button in the Share Extension") }
+        static var newConversation: String { String(localized: "share.target.newConversation",
+            defaultValue: "New conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Picker row that starts a brand-new conversation") }
+        static var sectionNew: String { String(localized: "share.section.new",
+            defaultValue: "New conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Picker section header above the new-conversation gateway rows") }
+        static var sectionRecent: String { String(localized: "share.section.recent",
+            defaultValue: "Recent chats", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Picker section header above the recent-conversation rows") }
+        static var untitledChat: String { String(localized: "share.target.untitled",
+            defaultValue: "Conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Fallback label for a recent chat with no title") }
+        static var itemFallback: String { String(localized: "share.item.fallback",
+            defaultValue: "Shared item", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Generic fallback label when a shared item has no resolvable name") }
+        static var capturePage: String { String(localized: "share.capture.page",
+            defaultValue: "Page text", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Title of the Share Extension row that toggles including the captured full-page text") }
+        static var captureSelection: String { String(localized: "share.capture.selection",
+            defaultValue: "Selected text", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Title of the Share Extension capture row when the user had text selected (the selection is captured instead of the whole page)") }
+        static var captureTruncated: String { String(localized: "share.capture.truncated",
+            defaultValue: "truncated", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Suffix on the captured-text size when the capture was cut at the size cap") }
+        static var captureToggleA11y: String { String(localized: "share.capture.toggleA11y",
+            defaultValue: "Include page text", bundle: AppLocalization.bundle, locale: AppLocalization.locale,
+            comment: "Accessibility label for the toggle that includes or excludes the captured page text") }
     }
 
     // MARK: - Preview model
@@ -1135,16 +1135,16 @@ struct ShareView: View {
             switch self {
             case .image(let name):
                 return name ?? String(localized: "share.item.image",
-                    defaultValue: "Image", comment: "Label for a shared image with no name")
+                    defaultValue: "Image", bundle: AppLocalization.bundle, locale: AppLocalization.locale, comment: "Label for a shared image with no name")
             case .file(let name):
                 return name ?? String(localized: "share.item.file",
-                    defaultValue: "File", comment: "Label for a shared file with no name")
+                    defaultValue: "File", bundle: AppLocalization.bundle, locale: AppLocalization.locale, comment: "Label for a shared file with no name")
             case .url:
                 return String(localized: "share.item.link",
-                    defaultValue: "Link", comment: "Label for a shared web link")
+                    defaultValue: "Link", bundle: AppLocalization.bundle, locale: AppLocalization.locale, comment: "Label for a shared web link")
             case .text:
                 return String(localized: "share.item.text",
-                    defaultValue: "Text", comment: "Label for shared plain text")
+                    defaultValue: "Text", bundle: AppLocalization.bundle, locale: AppLocalization.locale, comment: "Label for shared plain text")
             }
         }
     }

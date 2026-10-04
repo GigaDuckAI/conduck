@@ -19,9 +19,9 @@ nonisolated struct UsageGatewayIdentity: Equatable, Sendable {
     var statusText: String? {
         switch status {
         case .removed:
-            String(localized: "settings.usage.gateway.removed", defaultValue: "removed")
+            String(localized: "settings.usage.gateway.removed", defaultValue: "removed", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unavailable:
-            String(localized: "settings.usage.gateway.unavailable", defaultValue: "unavailable")
+            String(localized: "settings.usage.gateway.unavailable", defaultValue: "unavailable", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case nil:
             nil
         }
@@ -30,7 +30,7 @@ nonisolated struct UsageGatewayIdentity: Equatable, Sendable {
     var label: String {
         guard let statusText else { return name }
         return String(localized: "settings.usage.gateway.statusLabel",
-                      defaultValue: "\(name) (\(statusText))")
+                      defaultValue: "\(name) (\(statusText))", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 }
 
@@ -42,7 +42,7 @@ nonisolated struct UsageGatewayIdentitySnapshot: Sendable {
     func display(for key: String?) -> UsageGatewayIdentity {
         guard let key else {
             return UsageGatewayIdentity(name: String(
-                localized: "settings.usage.gateway.unattributed", defaultValue: "Not recorded"))
+                localized: "settings.usage.gateway.unattributed", defaultValue: "Not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         guard let ref = RemoteAgentRef(rawString: key) else {
             return UsageGatewayIdentity(name: key)

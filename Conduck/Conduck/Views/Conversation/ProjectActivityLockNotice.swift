@@ -33,7 +33,7 @@ struct ProjectActivityLockNotice: View {
                 .multilineTextAlignment(.center)
             if let onShowInWork {
                 Button(action: onShowInWork) {
-                    Text(String(localized: "conversations.thread.showInWork", defaultValue: "Show in Work"))  // xcstrings: chat-ui
+                    Text(String(localized: "conversations.thread.showInWork", defaultValue: "Show in Work", bundle: AppLocalization.bundle, locale: AppLocalization.locale))  // xcstrings: chat-ui
                 }
                 .accessibilityLabel(Text(verbatim: reason.accessibilityLabel))
                 .accessibilityHint(Text(verbatim: reason.accessibilityHint))

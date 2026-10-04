@@ -182,7 +182,7 @@ struct AttachmentComposerContainer: View {
         // the file the user just confirmed. Cancellation is ONLY the cancel-role
         // button (which also covers Esc on iPad hardware keyboards).
         .alert(
-            LocalizedStringResource("fileTransfer.softConfirm.title", defaultValue: "Attach large file?"),
+            LocalizedStringResource("fileTransfer.softConfirm.title", defaultValue: "Attach large file?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: Binding(
                 get: {
                     workbenchDestinationIsActive && coordinator.pendingLargeFile != nil
@@ -191,10 +191,10 @@ struct AttachmentComposerContainer: View {
             ),
             presenting: coordinator.pendingLargeFile
         ) { file in
-            Button(LocalizedStringResource("fileTransfer.softConfirm.attach", defaultValue: "Attach")) {
+            Button(LocalizedStringResource("fileTransfer.softConfirm.attach", defaultValue: "Attach", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 coordinator.confirmPendingLargeFile(vm: viewModel)
             }
-            Button(LocalizedStringResource("fileTransfer.softConfirm.cancel", defaultValue: "Cancel"), role: .cancel) {
+            Button(LocalizedStringResource("fileTransfer.softConfirm.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) {
                 coordinator.cancelPendingLargeFile()
             }
         } message: { file in
@@ -202,7 +202,7 @@ struct AttachmentComposerContainer: View {
                 format: String(localized: LocalizedStringResource(
                     "fileTransfer.softConfirm.message",
                     defaultValue: "%1$@ is %2$@ in size. Large files can take a while to upload."
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 file.originalName,
                 AttachmentChipStyle.formattedSize(file.byteSize)
             ))
@@ -220,18 +220,18 @@ struct AttachmentComposerContainer: View {
         }
         // Camera access denied — inline alert with an Open Settings action.
         .alert(
-            LocalizedStringResource("composer.camera.deniedTitle", defaultValue: "Camera access is off"),
+            LocalizedStringResource("composer.camera.deniedTitle", defaultValue: "Camera access is off", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: activeCameraDeniedPresentation
         ) {
-            Button(LocalizedStringResource("composer.camera.openSettings", defaultValue: "Open Settings")) {
+            Button(LocalizedStringResource("composer.camera.openSettings", defaultValue: "Open Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 CameraPermission.openSettings()
             }
-            Button(LocalizedStringResource("composer.camera.cancel", defaultValue: "Cancel"), role: .cancel) { }
+            Button(LocalizedStringResource("composer.camera.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) { }
         } message: {
             Text(LocalizedStringResource(
                 "composer.camera.deniedMessage",
                 defaultValue: "Allow camera access in Settings to take a photo."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         .onChange(of: workbenchDestinationIsActive) { _, isActive in
             guard !isActive else { return }

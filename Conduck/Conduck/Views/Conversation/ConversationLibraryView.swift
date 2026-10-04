@@ -628,7 +628,7 @@ struct ConversationLibraryView: View {
                     }
                 }
             }
-            .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway")))
+            .accessibilityLabel(Text(LocalizedStringResource("conversations.switchGateway", defaultValue: "Clone & continue on another gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .accessibilityIdentifier("toolbar.cloneGateway")
             .gatewayPresenceAccessibilityValue(for: presenceRef)   // the muted dot's state, as this element's value
         } else {
@@ -861,7 +861,7 @@ struct ConversationLibraryView: View {
             AccessibilityAnnouncer.announce(LocalizedStringResource(
                 "voice.announce.transcriptAdded",
                 defaultValue: "Transcript added"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .failure(let error):
             // Voice hard failure (Workstream A): the missing-model case self-heals
             // upstream in `InAppAudioRecorder`; what remains is a GENUINE hard

@@ -19,10 +19,10 @@ struct WorkDeskProjectDeletionSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Text(LocalizedStringResource("workdesk.project.delete.question",
-                        defaultValue: "Delete “\(review.projectTitle)”?"))
+                        defaultValue: "Delete “\(review.projectTitle)”?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.title2.weight(.semibold))
                     Text(LocalizedStringResource("workdesk.project.delete.context",
-                        defaultValue: "The project and its saved context will be removed."))
+                        defaultValue: "The project and its saved context will be removed.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .foregroundStyle(AppColors.textSecondary)
                     if review.conversationCount > 0 {
                         Text(WorkDeskCopy.retainedConversationCount(review.conversationCount))
@@ -30,37 +30,37 @@ struct WorkDeskProjectDeletionSheet: View {
                     }
                     if !review.sharedMaterialIDs.isEmpty {
                         Text(LocalizedStringResource("workdesk.project.delete.shared",
-                            defaultValue: "Some materials also appear in other projects. Keeping materials preserves those appearances; deleting materials removes them everywhere in Work."))
+                            defaultValue: "Some materials also appear in other projects. Keeping materials preserves those appearances; deleting materials removes them everywhere in Work.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                     }
                     if let error {
                         Text(verbatim: error).foregroundStyle(AppColors.warning)
                         Text(LocalizedStringResource("workdesk.project.delete.reopen",
-                            defaultValue: "Close this review and choose Delete project again to review the latest materials."))
+                            defaultValue: "Close this review and choose Delete project again to review the latest materials.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                     } else if review.materialCount > 0 {
                         Text(WorkDeskCopy.materialCount(review.materialCount))
                             .font(.headline)
                         VStack(alignment: .leading, spacing: 8) {
-                            Button(LocalizedStringResource("workdesk.project.delete.keep", defaultValue: "Keep materials")) {
+                            Button(LocalizedStringResource("workdesk.project.delete.keep", defaultValue: "Keep materials", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                                 delete(keepingMaterials: true)
                             }
                             .buttonStyle(.borderedProminent)
                             .keyboardShortcut(.defaultAction)
                             .accessibilityIdentifier("workdesk-delete-project-keep")
                             Text(LocalizedStringResource("workdesk.project.delete.keep.homeExplanation",
-                                defaultValue: "Materials that are only in this project return together to Home. Materials used elsewhere stay in those locations. Attached notes are kept too."))
+                                defaultValue: "Materials that are only in this project return together to Home. Materials used elsewhere stay in those locations. Attached notes are kept too.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                 .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                         }
                         Divider()
                         VStack(alignment: .leading, spacing: 8) {
                             Button(LocalizedStringResource("workdesk.project.delete.materialsEverywhere",
-                                defaultValue: "Delete project and materials everywhere"), role: .destructive) {
+                                defaultValue: "Delete project and materials everywhere", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .destructive) {
                                 delete(keepingMaterials: false)
                             }.buttonStyle(.bordered)
                                 .accessibilityIdentifier("workdesk-delete-project-materials")
                             Text(LocalizedStringResource("workdesk.project.delete.remove.explanation",
-                                defaultValue: "Removes these materials and their attached notes from Work on your synced devices. Existing conversations and files already sent to gateways remain."))
+                                defaultValue: "Removes these materials and their attached notes from Work on your synced devices. Existing conversations and files already sent to gateways remain.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                 .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                         }
                     } else {
@@ -74,10 +74,10 @@ struct WorkDeskProjectDeletionSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .disabled(isDeleting)
             }
-            .navigationTitle(Text(LocalizedStringResource("workdesk.project.delete.review", defaultValue: "Delete project")))
+            .navigationTitle(Text(LocalizedStringResource("workdesk.project.delete.review", defaultValue: "Delete project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) { dismiss() }
+                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) { dismiss() }
                         .disabled(isDeleting)
                 }
             }
@@ -96,7 +96,7 @@ struct WorkDeskProjectDeletionSheet: View {
             if saved { onDeleted(keepingMaterials); dismiss() }
             else {
                 error = organization.errorMessage
-                    ?? String(localized: "workdesk.project.delete.failed", defaultValue: "The project couldn’t be deleted.")
+                    ?? String(localized: "workdesk.project.delete.failed", defaultValue: "The project couldn’t be deleted.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 organization.errorMessage = nil
             }
         }

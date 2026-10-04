@@ -95,6 +95,11 @@ actor SettingsManager {
     /// targets so any reader sees the latest values without a round-trip.
     private let proAccess: @Sendable () -> ProAccessSnapshot
 
+    /// App UI language stays device-local, separate from the synced speech hint.
+    func getAppLanguage() -> AppLanguage {
+        AppLanguage(rawValue: defaults.string(forKey: AppLanguageStore.selectionKey) ?? "") ?? .english
+    }
+
     private let defaults: any DefaultsStore
 
     /// iCloud Key-Value Store for cross-device sync.
@@ -1902,7 +1907,7 @@ actor SettingsManager {
         )) ?? []
         let endpoint = existing.first ?? CustomVoiceEndpoint(
             id: UUID(),
-            name: String(localized: "settings.voice.custom.defaultName", defaultValue: "Custom endpoint")
+            name: String(localized: "settings.voice.custom.defaultName", defaultValue: "Custom endpoint", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         )
         let uuid = endpoint.id
 

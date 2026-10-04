@@ -170,7 +170,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
             }
             .contextMenu {
                 if let onCreateProject {
-                    Button(LocalizedStringResource("workdesk.project.new", defaultValue: "New project"), systemImage: "folder.badge.plus") {
+                    Button(LocalizedStringResource("workdesk.project.new", defaultValue: "New project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder.badge.plus") {
                         let point = backgroundPointer.point.map { WorkDeskCanvasGeometry.worldPoint($0, transform: transform) }
                             ?? session.projectInsertionPoint
                         if let point { onCreateProject(point) }
@@ -219,8 +219,8 @@ struct WorkDeskCanvas<CardContent: View>: View {
                         .accessibilityLabel(Text(verbatim: material.name))
                         .accessibilityAddTraits(selectedIDs.contains(material.id) ? .isSelected : [])
                         .accessibilityHint(Text(isSelecting
-                            ? LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material")
-                            : LocalizedStringResource("workdesk.canvas.focusMaterial", defaultValue: "Zoom in to this material")))
+                            ? LocalizedStringResource("workdesk.canvas.selectCard", defaultValue: "Select material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                            : LocalizedStringResource("workdesk.canvas.focusMaterial", defaultValue: "Zoom in to this material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     }
                 }
         }
@@ -298,7 +298,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
         .transition(reduceMotion ? .opacity : .scale(scale: 0.86).combined(with: .opacity))
         .contextMenu {
             if let onEditProject {
-                Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
+                Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "pencil") {
                     onEditProject(project.record)
                 }
             }
@@ -307,7 +307,7 @@ struct WorkDeskCanvas<CardContent: View>: View {
                 WorkDeskProjectArchiveButton(project: project.record, organization: organization)
             }
             if let onDeleteProject {
-                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
+                Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "trash") {
                     onDeleteProject(project.id)
                 }
             }
@@ -360,12 +360,12 @@ struct WorkDeskCanvas<CardContent: View>: View {
 
     private var dropInstruction: LocalizedStringResource {
         guard hover.isReady else {
-            return LocalizedStringResource("workdesk.canvas.holdToGroup", defaultValue: "Hold here to group")
+            return LocalizedStringResource("workdesk.canvas.holdToGroup", defaultValue: "Hold here to group", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         if hover.target?.isProject == true {
-            return LocalizedStringResource("workdesk.canvas.releaseToMove", defaultValue: "Release to move into project")
+            return LocalizedStringResource("workdesk.canvas.releaseToMove", defaultValue: "Release to move into project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
-        return LocalizedStringResource("workdesk.canvas.releaseToGroup", defaultValue: "Release to create project")
+        return LocalizedStringResource("workdesk.canvas.releaseToGroup", defaultValue: "Release to create project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     // Mouse controls can be quieter; touch keeps its full target size.
@@ -382,29 +382,29 @@ struct WorkDeskCanvas<CardContent: View>: View {
             Button { changeZoom(to: transform.scale / 1.2) } label: { Image(systemName: "minus").frame(width: viewportControlSize, height: viewportControlSize) }
                 .pointerIconButton(size: viewportControlSize)
                 .disabled(transform.scale <= WorkDeskCanvasGeometry.minimumScale)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoomOut", defaultValue: "Zoom out")))
-                .help(Text(LocalizedStringResource("workdesk.canvas.zoomOut", defaultValue: "Zoom out")))
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoomOut", defaultValue: "Zoom out", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
+                .help(Text(LocalizedStringResource("workdesk.canvas.zoomOut", defaultValue: "Zoom out", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             Button { changeZoom(to: 1) } label: {
                 Text(verbatim: zoomLabel)
                     .font(.caption.monospacedDigit()).frame(minWidth: 44, minHeight: viewportControlSize)
             }
             .pointerIconButton(size: viewportControlSize, horizontalPadding: 4)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.resetZoom", defaultValue: "Reset zoom")))
+            .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.resetZoom", defaultValue: "Reset zoom", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .accessibilityValue(Text(verbatim: zoomLabel))
-            .help(Text(LocalizedStringResource("workdesk.canvas.resetZoom", defaultValue: "Reset zoom")))
+            .help(Text(LocalizedStringResource("workdesk.canvas.resetZoom", defaultValue: "Reset zoom", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             Button { changeZoom(to: transform.scale * 1.2) } label: { Image(systemName: "plus").frame(width: viewportControlSize, height: viewportControlSize) }
                 .pointerIconButton(size: viewportControlSize)
                 .disabled(transform.scale >= WorkDeskCanvasGeometry.maximumScale)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoomIn", defaultValue: "Zoom in")))
-                .help(Text(LocalizedStringResource("workdesk.canvas.zoomIn", defaultValue: "Zoom in")))
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.zoomIn", defaultValue: "Zoom in", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
+                .help(Text(LocalizedStringResource("workdesk.canvas.zoomIn", defaultValue: "Zoom in", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             Rectangle().fill(AppColors.border).frame(width: 1, height: 18)
             Button(action: fitDesk) {
-                Text(LocalizedStringResource("workdesk.canvas.fit.short", defaultValue: "Fit"))
+                Text(LocalizedStringResource("workdesk.canvas.fit.short", defaultValue: "Fit", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption.weight(.medium)).frame(minWidth: 44, minHeight: viewportControlSize)
             }
                 .pointerIconButton(size: viewportControlSize, horizontalPadding: 4)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.fit", defaultValue: "Fit desk")))
-                .help(Text(LocalizedStringResource("workdesk.canvas.fit", defaultValue: "Fit desk")))
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.canvas.fit", defaultValue: "Fit desk", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
+                .help(Text(LocalizedStringResource("workdesk.canvas.fit", defaultValue: "Fit desk", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
         .foregroundStyle(AppColors.textSecondary)
         .background(.ultraThinMaterial, in: Capsule())

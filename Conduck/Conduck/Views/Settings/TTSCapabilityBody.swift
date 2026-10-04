@@ -102,7 +102,7 @@ struct TTSCapabilityBody: View {
                     helper: LocalizedStringResource(
                         "settings.tts.provider.modelOverride.helper",
                         defaultValue: "Leave empty for the recommended default. A wrong value fails at the next spoken reply."
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     voicePlaceholder: provider.defaultVoice,
                     pendingVoice: $pendingVoice,
                     onSaveVoice: onSaveVoice
@@ -150,12 +150,12 @@ struct TTSCapabilityBody: View {
             if isChecking {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(LocalizedStringResource("settings.voice.tts.previewPlaying", defaultValue: "Playing…"))
+                    Text(LocalizedStringResource("settings.voice.tts.previewPlaying", defaultValue: "Playing…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                 }
             } else {
                 Label(
-                    LocalizedStringResource("settings.voice.tts.preview", defaultValue: "Speak a sample"),
+                    LocalizedStringResource("settings.voice.tts.preview", defaultValue: "Speak a sample", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "speaker.wave.2"
                 )
                 .font(.subheadline.weight(.semibold))

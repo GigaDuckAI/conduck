@@ -45,7 +45,7 @@ struct GatewayPicker: View {
     private var name: String {
         selectedName ?? selectedOption?.name ?? String(localized: LocalizedStringResource(
             "workdesk.conversation.gateway.choose", defaultValue: "Choose a gateway"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     var body: some View {
@@ -71,7 +71,7 @@ struct GatewayPicker: View {
                 if options.contains(where: \.isHosted) {
                     Section(String(localized: LocalizedStringResource(
                         "settings.remoteAgent.hostedModels.header", defaultValue: "Hosted models"
-                    ))) {
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))) {
                         ForEach(options.filter(\.isHosted)) { option in
                             optionButton(option)
                         }
@@ -85,10 +85,10 @@ struct GatewayPicker: View {
             // button style keeps the same capsule and hover as Chat's clone.
             .menuStyle(.button)
             .pointerIconButton(shape: .capsule)
-            .help(String(localized: LocalizedStringResource("chat.chooseAI.label", defaultValue: "Choose AI")))
+            .help(String(localized: LocalizedStringResource("chat.chooseAI.label", defaultValue: "Choose AI", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             #endif
             .accessibilityLabel(
-                Text(LocalizedStringResource("chat.chooseAI.label", defaultValue: "Choose AI"))
+                Text(LocalizedStringResource("chat.chooseAI.label", defaultValue: "Choose AI", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     + Text(verbatim: ": " + name)
             )
             #if !os(macOS)

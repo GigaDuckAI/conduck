@@ -48,7 +48,7 @@ struct ICloudUnavailableBanner: View {
                 Button {
                     openICloudSystemSettings()
                 } label: {
-                    Text(LocalizedStringResource("sync.icloud.banner.openSettings", defaultValue: "Open Settings"))
+                    Text(LocalizedStringResource("sync.icloud.banner.openSettings", defaultValue: "Open Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
@@ -65,7 +65,7 @@ struct ICloudUnavailableBanner: View {
                     .foregroundStyle(AppColors.textTertiary)
             }
             .pointerIconButton()
-            .accessibilityLabel(Text(LocalizedStringResource("sync.icloud.banner.dismiss", defaultValue: "Dismiss")))
+            .accessibilityLabel(Text(LocalizedStringResource("sync.icloud.banner.dismiss", defaultValue: "Dismiss", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
         .padding(16)
         .glassCardBackground(borderColor: AppColors.sunsetOrange.opacity(0.4))
@@ -85,10 +85,10 @@ struct ICloudSyncSettingsRow: View {
             HStack(spacing: 10) {
                 Image(systemName: "exclamationmark.icloud")
                     .foregroundStyle(AppColors.sunsetOrange)
-                Text(LocalizedStringResource("sync.icloud.settings.title", defaultValue: "iCloud Sync"))
+                Text(LocalizedStringResource("sync.icloud.settings.title", defaultValue: "iCloud Sync", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textPrimary)
                 Spacer()
-                Text(LocalizedStringResource("sync.icloud.settings.statusOff", defaultValue: "Off"))
+                Text(LocalizedStringResource("sync.icloud.settings.statusOff", defaultValue: "Off", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(AppColors.sunsetOrange)
             }
@@ -99,7 +99,7 @@ struct ICloudSyncSettingsRow: View {
             Button {
                 openICloudSystemSettings()
             } label: {
-                Text(LocalizedStringResource("sync.icloud.banner.openSettings", defaultValue: "Open Settings"))
+                Text(LocalizedStringResource("sync.icloud.banner.openSettings", defaultValue: "Open Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.bordered)

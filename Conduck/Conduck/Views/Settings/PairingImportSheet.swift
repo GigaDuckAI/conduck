@@ -127,7 +127,7 @@ struct PairingImportSheet: View {
                             flow.invalidatePendingImport()
                             dismiss()
                         } label: {
-                            Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
+                            Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         }
                     }
                 }
@@ -139,7 +139,7 @@ struct PairingImportSheet: View {
                 Text(LocalizedStringResource(
                     "settings.pairing.trust.blocked.title",
                     defaultValue: "Can't verify this server"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 isPresented: $flow.showingTrustBlockAlert,
                 presenting: flow.trustBlockContext
             ) { context in
@@ -155,7 +155,7 @@ struct PairingImportSheet: View {
                     flow.returnToReview(notice: .refused(lane: context.lane,
                                                         block: context.block))
                 } label: {
-                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
+                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             } message: { context in
                 Text(blockReason(lane: context.lane, block: context.block))
@@ -186,12 +186,12 @@ struct PairingImportSheet: View {
             return LocalizedStringResource(
                 "settings.pairing.review.sheetTitle",
                 defaultValue: "Review setup code"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return LocalizedStringResource(
             "settings.pairing.sheet.title",
             defaultValue: "Import setup code"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// The sheet's trailing action. `.done` offers Done everywhere; on macOS the
@@ -206,7 +206,7 @@ struct PairingImportSheet: View {
             Button {
                 dismiss()
             } label: {
-                Text(LocalizedStringResource("settings.secret.done", defaultValue: "Done"))
+                Text(LocalizedStringResource("settings.secret.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .fontWeight(.semibold)
             }
             .keyboardShortcut(.defaultAction)
@@ -219,7 +219,7 @@ struct PairingImportSheet: View {
                     Text(LocalizedStringResource(
                         "settings.pairing.paste.import",
                         defaultValue: "Import"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .fontWeight(.semibold)
                 }
                 .keyboardShortcut(.defaultAction)
@@ -270,7 +270,7 @@ struct PairingImportSheet: View {
                 Text(LocalizedStringResource(
                     "settings.pairing.scanner.prompt",
                     defaultValue: "Point the camera at the QR code from conduck-connect."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
         #else
@@ -282,7 +282,7 @@ struct PairingImportSheet: View {
         Text(LocalizedStringResource(
             "settings.pairing.scanner.unavailable",
             defaultValue: "Camera scanning isn't available here. Paste the code instead."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
             .foregroundStyle(AppColors.textTertiary)
     }
@@ -316,7 +316,7 @@ struct PairingImportSheet: View {
                 Button {
                     submitPastedCode()
                 } label: {
-                    Text(LocalizedStringResource("settings.pairing.paste.import", defaultValue: "Import"))
+                    Text(LocalizedStringResource("settings.pairing.paste.import", defaultValue: "Import", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.borderedProminent)
@@ -372,7 +372,7 @@ struct PairingImportSheet: View {
                 Text(LocalizedStringResource(
                     "settings.pairing.entry.paste",
                     defaultValue: "Paste setup code"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             .labelsHidden()
             .font(.system(.body, design: .monospaced))
@@ -424,7 +424,7 @@ struct PairingImportSheet: View {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "settings.pairing.entry.masked.a11y",
                 defaultValue: "Setup code entered. Activate to edit it."
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
 
             Button {
                 flow.pastedCode = ""
@@ -437,7 +437,7 @@ struct PairingImportSheet: View {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "settings.pairing.entry.clear",
                 defaultValue: "Clear setup code"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -476,7 +476,7 @@ struct PairingImportSheet: View {
                 Text(LocalizedStringResource(
                     "settings.pairing.entry.pasteAction",
                     defaultValue: "Paste"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } icon: {
                 Image(systemName: "doc.on.clipboard")
             }
@@ -538,7 +538,7 @@ struct PairingImportSheet: View {
                     caption: model.becomesDefault ? String(
                         localized: "settings.pairing.review.default.value",
                         defaultValue: "New chats will use this gateway."
-                    ) : nil,
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale) : nil,
                     warning: gatewayWarning?.text,
                     warningSymbol: gatewayWarning?.symbol ?? Self.defaultWarningSymbol
                 )
@@ -554,7 +554,7 @@ struct PairingImportSheet: View {
                         reviewRow(
                             label: replacingLabel(model),
                             value: String(localized: "settings.pairing.review.replacing.sameAddress",
-                                          defaultValue: "The same address. The saved key and certificate settings are replaced."),
+                                          defaultValue: "The same address. The saved key and certificate settings are replaced.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                             monospaced: false
                         )
                     }
@@ -566,13 +566,13 @@ struct PairingImportSheet: View {
                         let fileWarning = reviewWarning(for: destination)
                         reviewRow(
                             label: String(localized: "settings.pairing.review.files",
-                                          defaultValue: "Files go to"),
+                                          defaultValue: "Files go to", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                             value: destination,
                             monospaced: true,
                             caption: replacing.flatMap { previous in
                                 previous == destination ? nil : String(
                                     format: String(localized: "settings.pairing.review.files.replacing",
-                                                   defaultValue: "Replacing %@"),
+                                                   defaultValue: "Replacing %@", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                                     previous
                                 )
                             },
@@ -583,11 +583,11 @@ struct PairingImportSheet: View {
                         let keptWarning = reviewWarning(for: destination)
                         reviewRow(
                             label: String(localized: "settings.pairing.review.files.kept",
-                                          defaultValue: "Files keep going to"),
+                                          defaultValue: "Files keep going to", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                             value: destination,
                             monospaced: true,
                             caption: String(localized: "settings.pairing.review.files.kept.caption",
-                                            defaultValue: "This code doesn't set up file transfer, so your current setup stays."),
+                                            defaultValue: "This code doesn't set up file transfer, so your current setup stays.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                             warning: keptWarning?.text,
                             warningSymbol: keptWarning?.symbol ?? Self.defaultWarningSymbol
                         )
@@ -598,7 +598,7 @@ struct PairingImportSheet: View {
             .settingsCardPassiveRow()
         } header: {
             Text(LocalizedStringResource("settings.pairing.review.header",
-                                         defaultValue: "Gateway"))
+                                         defaultValue: "Gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -616,7 +616,7 @@ struct PairingImportSheet: View {
         return String(localized: LocalizedStringResource(
             "settings.endpoint.plainHTTP.warning.v2",
             defaultValue: "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The warning shown for `destination`, and the symbol that names its KIND.
@@ -644,7 +644,7 @@ struct PairingImportSheet: View {
         return String(localized: LocalizedStringResource(
             "settings.pairing.review.temporaryTunnel",
             defaultValue: "Temporary address — it changes when the tunnel restarts."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// "Replacing OpenClaw" when the target's name comes from LOCAL state, plain
@@ -654,11 +654,11 @@ struct PairingImportSheet: View {
     private func replacingLabel(_ model: PairingReviewModel) -> String {
         guard let name = model.targetName else {
             return String(localized: "settings.pairing.review.replacing",
-                          defaultValue: "Replacing")
+                          defaultValue: "Replacing", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return String(
             format: String(localized: "settings.pairing.review.replacing.named",
-                           defaultValue: "Replacing %@"),
+                           defaultValue: "Replacing %@", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             name
         )
     }
@@ -672,11 +672,11 @@ struct PairingImportSheet: View {
             ? LocalizedStringResource(
                 "settings.pairing.review.warning.access.tools",
                 defaultValue: "Anyone with this code may connect with the same access, which may include tools."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             : LocalizedStringResource(
                 "settings.pairing.review.warning.access.files",
                 defaultValue: "Anyone with this code may connect with the same access, which may include tools and shared files."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
 
         return Section {
             PairingSafetyCallout(
@@ -684,12 +684,12 @@ struct PairingImportSheet: View {
                 title: LocalizedStringResource(
                     "settings.pairing.review.warning.title",
                     defaultValue: "Before you connect"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 bullets: [
                     LocalizedStringResource(
                         "settings.pairing.review.warning.trust",
                         defaultValue: "Only continue if you trust the person who shared this code."
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     accessBullet
                 ]
             )
@@ -733,7 +733,7 @@ struct PairingImportSheet: View {
         switch notice {
         case .destinationChanged:
             return String(localized: "settings.pairing.review.notice.changed",
-                          defaultValue: "This gateway's settings changed while you were looking at this screen. Nothing was connected — the details above are the current ones. Check them again before you continue.")
+                          defaultValue: "This gateway's settings changed while you were looking at this screen. Nothing was connected — the details above are the current ones. Check them again before you continue.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .refused(let lane, let block):
             return blockReason(lane: lane, block: block)
         }
@@ -780,7 +780,7 @@ struct PairingImportSheet: View {
                 Text(LocalizedStringResource(
                     "error.recipeLink.howToFix",
                     defaultValue: "How to fix this"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 Image(systemName: "arrow.up.right")
                     .font(.caption)
             }
@@ -804,9 +804,9 @@ struct PairingImportSheet: View {
                         // action really is destructive to a saved setup.
                         Text(model.replacesExistingGateway
                              ? String(localized: "settings.pairing.review.replaceAndConnect",
-                                      defaultValue: "Replace & Connect")
+                                      defaultValue: "Replace & Connect", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                              : String(localized: "settings.pairing.review.connect",
-                                      defaultValue: "Connect"))
+                                      defaultValue: "Connect", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                             .font(.subheadline.weight(.semibold))
                     }
                     .frame(maxWidth: .infinity)
@@ -820,7 +820,7 @@ struct PairingImportSheet: View {
                     flow.useDifferentCode()
                 } label: {
                     Text(LocalizedStringResource("settings.pairing.review.different",
-                                                 defaultValue: "Use another code"))
+                                                 defaultValue: "Use another code", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
@@ -901,8 +901,8 @@ struct PairingImportSheet: View {
     /// three different remedies for one cause.
     private func blockReason(lane: PairingTrustLane, block: PairingTrustBlock) -> String {
         let subject = lane == .gateway
-            ? String(localized: "settings.pairing.trust.subject.gateway", defaultValue: "The gateway")
-            : String(localized: "settings.pairing.trust.subject.file", defaultValue: "The file server")
+            ? String(localized: "settings.pairing.trust.subject.gateway", defaultValue: "The gateway", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+            : String(localized: "settings.pairing.trust.subject.file", defaultValue: "The file server", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         switch block {
         case .certificateNotPubliclyTrusted:
@@ -910,7 +910,7 @@ struct PairingImportSheet: View {
                 format: String(
                     localized: "settings.pairing.trust.block.notTrusted",
                     defaultValue: "%1$@'s certificate isn't one this device trusts, so Conduck won't connect to it. %2$@"
-                ), subject, CertificateTrustCopy.untrustedRemedy)
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale), subject, CertificateTrustCopy.untrustedRemedy)
         }
     }
 
@@ -965,10 +965,10 @@ struct PairingImportSheet: View {
                 Text(flow.gatewayFailureIsRetryable
                      ? LocalizedStringResource(
                         "settings.pairing.recovery.prompt",
-                        defaultValue: "Your settings were saved, but the connection couldn't be verified.")
+                        defaultValue: "Your settings were saved, but the connection couldn't be verified.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                      : LocalizedStringResource(
                         "settings.pairing.recovery.prompt.terminal",
-                        defaultValue: "Your settings were saved, but the connection was refused for the reason above. Trying again would reach the same answer, so fix that first."))
+                        defaultValue: "Your settings were saved, but the connection was refused for the reason above. Trying again would reach the same answer, so fix that first.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -987,7 +987,7 @@ struct PairingImportSheet: View {
                     } label: {
                         Label(
                             LocalizedStringResource("settings.pairing.recovery.retry",
-                                                    defaultValue: "Try again"),
+                                                    defaultValue: "Try again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             systemImage: "arrow.clockwise"
                         )
                         .font(.subheadline.weight(.semibold))
@@ -1000,7 +1000,7 @@ struct PairingImportSheet: View {
                     flow.backToInstructions()
                 } label: {
                     Text(LocalizedStringResource("settings.pairing.recovery.back",
-                                                 defaultValue: "Back to instructions"))
+                                                 defaultValue: "Back to instructions", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                 }
                 .buttonStyle(.bordered)
@@ -1011,7 +1011,7 @@ struct PairingImportSheet: View {
                         onOpenManualSettings?()
                     } label: {
                         Text(LocalizedStringResource("settings.pairing.recovery.manual",
-                                                     defaultValue: "Fix it manually"))
+                                                     defaultValue: "Fix it manually", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline)
                     }
                     .buttonStyle(.bordered)
@@ -1047,7 +1047,7 @@ struct PairingImportSheet: View {
                     Text(LocalizedStringResource(
                         "settings.pairing.tailscale.note",
                         defaultValue: "This gateway is on a tailnet. Install the Tailscale app on this device and sign in to the same tailnet, or the connection test will fail."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1058,7 +1058,7 @@ struct PairingImportSheet: View {
                     Text(LocalizedStringResource(
                         "settings.pairing.tailscale.privateRelay",
                         defaultValue: "Already signed in and it still fails? Turn off iCloud Private Relay — Settings › your name › iCloud › Private Relay. It can take over name lookups even while Tailscale says it is connected, so this gateway's address is looked up on the public internet instead of inside your tailnet."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption)
                         .foregroundStyle(AppColors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1067,7 +1067,7 @@ struct PairingImportSheet: View {
                     Text(LocalizedStringResource(
                         "settings.pairing.tailscale.appStore",
                         defaultValue: "Get Tailscale"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                 }
                 .pointerLink()
@@ -1080,7 +1080,7 @@ struct PairingImportSheet: View {
                         Text(LocalizedStringResource(
                             "settings.pairing.tailscale.recipe",
                             defaultValue: "Tailscale Serve guide"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         Image(systemName: "arrow.up.right")
                             .font(.caption)
                     }
@@ -1139,13 +1139,13 @@ struct PairingImportSheet: View {
         switch stage {
         case .save:
             return LocalizedStringResource("settings.pairing.stage.save",
-                                           defaultValue: "Save configuration")
+                                           defaultValue: "Save configuration", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .gateway:
             return LocalizedStringResource("settings.pairing.stage.gatewayTest",
-                                           defaultValue: "Gateway connection")
+                                           defaultValue: "Gateway connection", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .file:
             return LocalizedStringResource("settings.pairing.stage.fileTest",
-                                           defaultValue: "File transfer")
+                                           defaultValue: "File transfer", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

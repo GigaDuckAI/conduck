@@ -115,11 +115,11 @@ struct VoiceProviderDetailView: View {
                     title: LocalizedStringResource(
                         "settings.voice.openRouter.reuse.title.v2",
                         defaultValue: "You've already set up OpenRouter for chat. Reuse that API key for voice?"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     buttonTitle: LocalizedStringResource(
                         "settings.voice.openRouter.reuse.button.v2",
                         defaultValue: "Use my OpenRouter key"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     action: { await viewModel.reuseGatewayKeyForOpenRouterVoice() }
                 )
             }
@@ -140,12 +140,12 @@ struct VoiceProviderDetailView: View {
                 Text(LocalizedStringResource(
                     "settings.voice.detail.activationHint",
                     defaultValue: "Choose your active providers on the Voice screen."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 if !vendor.isOnDevice {
                     Text(LocalizedStringResource(
                         "settings.voice.detail.creditHint",
                         defaultValue: "Tests and previews use a small amount of your provider's credits."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
             .font(.caption)
@@ -165,7 +165,7 @@ struct VoiceProviderDetailView: View {
             Text(LocalizedStringResource(
                 "settings.voice.detail.activationHint.apple",
                 defaultValue: "Apple is configured here only. Choose your active speech-to-text and text-to-speech providers on the Voice screen."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
         }
     }
@@ -209,15 +209,15 @@ struct VoiceProviderDetailView: View {
                 Text(LocalizedStringResource(
                     "settings.voice.section.providerAccess",
                     defaultValue: "Provider Access"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } footer: {
                 Text(metadata.isOnDevice
                      ? LocalizedStringResource(
                         "settings.voice.access.footer.apple.v3",
-                        defaultValue: "Runs on your device. Your voice stays on your device.")
+                        defaultValue: "Runs on your device. Your voice stays on your device.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                      : LocalizedStringResource(
                         "settings.voice.access.footer",
-                        defaultValue: "One key for both Speech-to-Text and Text-to-Speech, stored in your Apple Keychain."))
+                        defaultValue: "One key for both Speech-to-Text and Text-to-Speech, stored in your Apple Keychain.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -254,14 +254,14 @@ struct VoiceProviderDetailView: View {
             Text(LocalizedStringResource(
                 "settings.voice.section.speechToText",
                 defaultValue: "Speech-to-Text"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             // Short privacy hint right under the record test; the per-test credit
             // cost is covered once in the trailing `detailFootnotes`.
             Text(LocalizedStringResource(
                 "settings.voice.cloudTest.footer",
                 defaultValue: "Your clip is sent to \(metadata.displayName) to transcribe, and isn't kept by Conduck."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
             .foregroundStyle(AppColors.textSecondary)
         }
@@ -284,7 +284,7 @@ struct VoiceProviderDetailView: View {
                     Text(LocalizedStringResource(
                         "settings.voice.tts.coming",
                         defaultValue: "Text-to-speech coming soon"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textTertiary)
                 }
@@ -292,7 +292,7 @@ struct VoiceProviderDetailView: View {
                 Text(LocalizedStringResource(
                     "settings.voice.section.textToSpeech",
                     defaultValue: "Text-to-Speech"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         case .none:
             EmptyView()
@@ -335,7 +335,7 @@ struct VoiceProviderDetailView: View {
             Text(LocalizedStringResource(
                 "settings.voice.section.textToSpeech",
                 defaultValue: "Text-to-Speech"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             ttsPreviewStatusFooter(ttsID: ttsID)
         }
@@ -356,7 +356,7 @@ struct VoiceProviderDetailView: View {
             Text(LocalizedStringResource(
                 "settings.voice.tts.footer",
                 defaultValue: "If a reply can't reach this provider, it's spoken with Apple's on-device voice."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 }

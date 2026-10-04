@@ -82,7 +82,7 @@ extension AttachmentGalleryPage {
                 thumbnailData: attachment.thumbnailData,
                 accessibilityLabel: String(
                     format: String(localized: LocalizedStringResource(
-                        "attachment.image.accessibility", defaultValue: "Image %lld of %lld")),
+                        "attachment.image.accessibility", defaultValue: "Image %lld of %lld", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     index + 1, attachments.count
                 ),
                 // The name the person's own source carried. A photo-library
@@ -119,7 +119,7 @@ enum AttachmentGalleryHeader {
             String(localized: LocalizedStringResource(
                 "attachment.gallery.position",
                 defaultValue: "%1$lld of %2$lld"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             Int64(position),
             Int64(count)
         )
@@ -440,11 +440,11 @@ struct AttachmentFullScreenView<PageActions: View>: View {
             ? LocalizedStringResource(
                 "attachment.gallery.previous",
                 defaultValue: "Previous Image"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             : LocalizedStringResource(
                 "attachment.gallery.next",
                 defaultValue: "Next Image"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
     #endif
 
@@ -499,7 +499,7 @@ struct AttachmentFullScreenView<PageActions: View>: View {
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "attachment.fullscreen.done",
                     defaultValue: "Done"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
             .padding(.horizontal, 12)
             .frame(minHeight: AttachmentGalleryChrome.headerHeight)
@@ -808,7 +808,7 @@ private struct ZoomableImagePage: View {
             Text(LocalizedStringResource(
                 "attachment.gallery.loadFailed",
                 defaultValue: "This image couldn't be opened."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.callout)
             .foregroundStyle(.white)
             .multilineTextAlignment(.center)
@@ -825,7 +825,7 @@ private struct ZoomableImagePage: View {
             Text(LocalizedStringResource(
                 "attachment.gallery.retry",
                 defaultValue: "Retry"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         .buttonStyle(.bordered)
         .tint(.white)

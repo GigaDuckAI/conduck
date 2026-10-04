@@ -254,6 +254,7 @@
 				Services/ReplySanitizer.swift,
 				Services/Storage/APIKeyReadResult.swift,
 				Services/Storage/ConduckStorage.swift,
+				Services/Storage/AppLanguageStore.swift,
 				Services/Storage/ContentSyncPreferenceStore.swift,
 				Services/Storage/InMemoryStorage.swift,
 				Services/Storage/LiveStorage.swift,
@@ -290,6 +291,27 @@
 			);
 			target = 630432CD2FB759DB00994EC0 /* ConduckWatch Watch App */;
 		};
+		63A110000000000000000001 /* Language reader for Watch widget */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Services/Storage/LiveStorage.swift,
+			);
+			target = 630432E02FB75BAE00994EC0 /* ConduckWatchExtension */;
+		};
+		63A110000000000000000002 /* Language reader for ConduckShareExtension */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Services/Storage/LiveStorage.swift,
+			);
+			target = 631B3F202FD060FC00E01924 /* ConduckShareExtension */;
+		};
+		63A110000000000000000003 /* Language reader for ConduckShareExtensionMac */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Services/Storage/LiveStorage.swift,
+			);
+			target = 8ECFBB4ECFC1F14CD4D5BE26 /* ConduckShareExtensionMac */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -297,6 +319,9 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				630433012FBB000000994EC0 /* Exceptions for "Conduck" folder in "Conduck" target */,
+				63A110000000000000000001 /* Language reader for Watch widget */,
+				63A110000000000000000003 /* Language reader for ConduckShareExtensionMac */,
+				63A110000000000000000002 /* Language reader for ConduckShareExtension */,
 				63E4A0010000000000000001 /* Exceptions for "Conduck" folder in "ConduckWatch Watch App" target */,
 			);
 			path = Conduck;
@@ -681,6 +706,9 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				es,
+				"zh-Hans",
+				ja,
 				Base,
 			);
 			mainGroup = 630432B32FB7593700994EC0;
@@ -906,6 +934,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				VALIDATE_PRODUCT = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CONDUCK_LOCALIZATION_EXTENSION";
 			};
 			name = Release;
 		};
@@ -969,6 +998,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CONDUCK_LOCALIZATION_EXTENSION";
 			};
 			name = Debug;
 		};
@@ -1048,7 +1078,7 @@
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = macosx;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING CONDUCK_LOCALIZATION_EXTENSION";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -1076,7 +1106,7 @@
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING CONDUCK_LOCALIZATION_EXTENSION";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
@@ -1385,6 +1415,7 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CONDUCK_LOCALIZATION_EXTENSION";
 			};
 			name = Debug;
 		};
@@ -1416,6 +1447,7 @@
 				TARGETED_DEVICE_FAMILY = 4;
 				VALIDATE_PRODUCT = YES;
 				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CONDUCK_LOCALIZATION_EXTENSION";
 			};
 			name = Release;
 		};
@@ -1507,6 +1539,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CONDUCK_LOCALIZATION_EXTENSION";
 			};
 			name = Debug;
 		};
@@ -1536,6 +1569,7 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CONDUCK_LOCALIZATION_EXTENSION";
 			};
 			name = Release;
 		};
@@ -1560,7 +1594,7 @@
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG CONDUCK_TESTING CONDUCK_LOCALIZATION_EXTENSION";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;

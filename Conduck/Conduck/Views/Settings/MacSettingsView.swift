@@ -96,12 +96,12 @@ struct MacSettingsView: View {
 
         var title: LocalizedStringResource {
             switch self {
-            case .personalAI:   return LocalizedStringResource("settings.mac.personalAI.title", defaultValue: "Personal AI")
-            case .voice:        return LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice")
-            case .general:      return LocalizedStringResource("settings.mac.general.title", defaultValue: "General")
+            case .personalAI:   return LocalizedStringResource("settings.mac.personalAI.title", defaultValue: "Personal AI", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            case .voice:        return LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            case .general:      return LocalizedStringResource("settings.mac.general.title", defaultValue: "General", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .usage:        return UsageDashboardIdentity.title
-            case .diagnostics:  return LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics")
-            case .about:        return LocalizedStringResource("settings.mac.about.title", defaultValue: "About")
+            case .diagnostics:  return LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            case .about:        return LocalizedStringResource("settings.mac.about.title", defaultValue: "About", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             }
         }
 
@@ -244,7 +244,7 @@ struct MacSettingsView: View {
                 pendingSelection = nil
             }
             Button(
-                LocalizedStringResource("settings.editor.discard.keepEditing", defaultValue: "Keep Editing"),
+                LocalizedStringResource("settings.editor.discard.keepEditing", defaultValue: "Keep Editing", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) { pendingSelection = nil }
         } message: {
@@ -269,8 +269,8 @@ struct MacSettingsView: View {
             ? LocalizedStringResource(
                 "settings.editor.discard.close.title",
                 defaultValue: "Discard changes and close Settings?"
-            )
-            : LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?")
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("settings.editor.discard.title", defaultValue: "Discard changes?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     private var outerDiscardConfirmTitle: LocalizedStringResource {
@@ -278,8 +278,8 @@ struct MacSettingsView: View {
             ? LocalizedStringResource(
                 "settings.editor.discard.close.confirm",
                 defaultValue: "Discard & Close"
-            )
-            : LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard")
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("settings.editor.discard.confirm", defaultValue: "Discard", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     private var outerDiscardMessage: LocalizedStringResource {
@@ -287,11 +287,11 @@ struct MacSettingsView: View {
             ? LocalizedStringResource(
                 "settings.editor.discard.close.message",
                 defaultValue: "Your unsaved changes will be lost and Settings will close."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             : LocalizedStringResource(
                 "settings.editor.discard.switch.message",
                 defaultValue: "Switching sections will discard your unsaved changes."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// Done: confirm first when an editor is dirty, else close immediately. Esc
@@ -349,7 +349,7 @@ struct MacSettingsView: View {
                 Button {
                     attemptDismiss()
                 } label: {
-                    Text(LocalizedStringResource("settings.mac.done", defaultValue: "Done"))
+                    Text(LocalizedStringResource("settings.mac.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
                 // De-emphasized (was `.borderedProminent` amber): it was visually
                 // out-competing the editor's plain-text Save, baiting accidental

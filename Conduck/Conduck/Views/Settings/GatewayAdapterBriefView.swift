@@ -51,7 +51,7 @@ struct GatewayAdapterBriefView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.adapter.title",
                 defaultValue: "Keep your AI. Add an adapter."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .onboardingScaledFont(.title2, weight: .bold)
             .foregroundStyle(AppColors.textEmphasis)
             .multilineTextAlignment(.center)
@@ -90,7 +90,7 @@ struct GatewayAdapterBriefView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.adapter.body1",
                 defaultValue: "Your AI stays exactly as it is. It just needs a small front door — an adapter — that receives Conduck's messages, hands them to your AI, and sends the answer back."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .onboardingScaledFont(.subheadline)
             .foregroundStyle(AppColors.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -98,7 +98,7 @@ struct GatewayAdapterBriefView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.adapter.body2",
                 defaultValue: "You don't have to build it yourself: copy the instructions below and paste them into the AI coding tool you built yours with. It will do the rest."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .onboardingScaledFont(.subheadline)
             .foregroundStyle(AppColors.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -124,7 +124,7 @@ struct GatewayAdapterBriefView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.adapter.caution.row",
                 defaultValue: "It can trigger your AI's tools — keep it private and require a token."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .onboardingScaledFont(.footnote)
             .foregroundStyle(AppColors.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -146,8 +146,8 @@ struct GatewayAdapterBriefView: View {
         Button(action: copyBrief) {
             Label {
                 Text(didCopy
-                    ? LocalizedStringResource("gateway.setupCommand.copied", defaultValue: "Copied")
-                    : LocalizedStringResource("gatewaySetup.adapter.copy", defaultValue: "Copy instructions for my AI"))
+                    ? LocalizedStringResource("gateway.setupCommand.copied", defaultValue: "Copied", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("gatewaySetup.adapter.copy", defaultValue: "Copy instructions for my AI", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } icon: {
                 Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
             }
@@ -183,7 +183,7 @@ struct GatewayAdapterBriefView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.adapter.continue",
                 defaultValue: "My adapter is running — continue"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.headline)
                 .foregroundColor(AppColors.textEmphasis)
                 .frame(maxWidth: Constants.Layout.buttonMaxWidth)
@@ -208,7 +208,7 @@ struct GatewayAdapterBriefView: View {
         let template = String(localized: LocalizedStringResource(
             "gatewaySetup.adapter.learnMoreLinks",
             defaultValue: "Want more context? [See how it works](%1$@), or [read the full adapter contract](%2$@)."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         let markdown = String(
             format: template,
             Constants.adapterBuildGuideURL,

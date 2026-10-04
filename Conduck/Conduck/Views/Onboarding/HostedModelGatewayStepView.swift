@@ -390,11 +390,11 @@ struct HostedModelGatewayStepView: View {
                     title: LocalizedStringResource(
                         "settings.remoteAgent.openRouter.reuse.title",
                         defaultValue: "You've already set up OpenRouter for voice. Reuse that API key here?"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     buttonTitle: LocalizedStringResource(
                         "settings.remoteAgent.openRouter.reuse.button",
                         defaultValue: "Use my voice key"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     action: {
                         // No staging swap while a probe/save/sign-in is mid-flight
                         // against the current credential intent.
@@ -673,7 +673,7 @@ struct HostedModelGatewayStepView: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.openRouter.signIn.staged",
                     defaultValue: "Signed in with OpenRouter"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .onboardingScaledFont(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
                 Spacer(minLength: 0)
@@ -688,7 +688,7 @@ struct HostedModelGatewayStepView: View {
             Text(LocalizedStringResource(
                 "settings.remoteAgent.openRouter.signIn.stagedDetail",
                 defaultValue: "A new API key now sits in your OpenRouter account."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.caption)
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -699,7 +699,7 @@ struct HostedModelGatewayStepView: View {
                             Text(LocalizedStringResource(
                                 "settings.remoteAgent.openRouter.signIn.manage",
                                 defaultValue: "Manage on OpenRouter"
-                            ))
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             Image(systemName: "arrow.up.right")
                                 .onboardingScaledFont(.caption)
                         }
@@ -714,7 +714,7 @@ struct HostedModelGatewayStepView: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.openRouter.signIn.useDifferentKey",
                         defaultValue: "Use a different key"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .onboardingScaledFont(.subheadline, weight: .semibold)
                 }
                 // Tinted inline text trailing a row — a row style would stretch
@@ -754,7 +754,7 @@ struct HostedModelGatewayStepView: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.openRouter.signIn.discarded",
                     defaultValue: "The key you signed in with still exists in your OpenRouter account."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .onboardingScaledFont(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -766,7 +766,7 @@ struct HostedModelGatewayStepView: View {
                         Text(LocalizedStringResource(
                             "settings.remoteAgent.openRouter.signIn.manage",
                             defaultValue: "Manage on OpenRouter"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         Image(systemName: "arrow.up.right")
                             .onboardingScaledFont(.caption)
                     }
@@ -780,7 +780,7 @@ struct HostedModelGatewayStepView: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.openRouter.signIn.discardedDismiss",
                         defaultValue: "Dismiss"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .onboardingScaledFont(.subheadline, weight: .semibold)
                 }
                 .inlineLinkButton()
@@ -813,7 +813,7 @@ struct HostedModelGatewayStepView: View {
             Text(LocalizedStringResource(
                 "settings.remoteAgent.reuse.selected",
                 defaultValue: "OpenRouter voice key selected"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             Spacer(minLength: 0)
@@ -823,7 +823,7 @@ struct HostedModelGatewayStepView: View {
                 Text(LocalizedStringResource(
                     "settings.remoteAgent.reuse.change",
                     defaultValue: "Change"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .onboardingScaledFont(.subheadline, weight: .semibold)
             }
             // Tinted inline text trailing a row — a row style would stretch it

@@ -20,9 +20,9 @@ enum WorkboardLayoutMode: String, CaseIterable {
 
     var title: LocalizedStringResource {
         switch self {
-        case .desk: LocalizedStringResource("workdesk.layout.desk", defaultValue: "Desk")
-        case .tiles: LocalizedStringResource("workboard.layout.tiles", defaultValue: "Tiles")
-        case .list: LocalizedStringResource("workboard.layout.list", defaultValue: "List")
+        case .desk: LocalizedStringResource("workdesk.layout.desk", defaultValue: "Desk", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .tiles: LocalizedStringResource("workboard.layout.tiles", defaultValue: "Tiles", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .list: LocalizedStringResource("workboard.layout.list", defaultValue: "List", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

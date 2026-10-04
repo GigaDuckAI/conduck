@@ -84,7 +84,7 @@ struct GatewayChooserStepView: View {
                         subtitle: LocalizedStringResource(
                             "onboarding.gatewayChooser.selfHosted.subtitle",
                             defaultValue: "Runs on your own server — tools and file access."
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         action: { onFullAgent?() }
                     )
                     .disabled(onFullAgent == nil)

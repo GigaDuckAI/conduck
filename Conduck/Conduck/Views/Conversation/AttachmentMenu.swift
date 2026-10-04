@@ -103,7 +103,7 @@ struct AttachmentMenu: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.menu",
             defaultValue: "Add attachment"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     @ViewBuilder
@@ -145,28 +145,28 @@ struct AttachmentMenu: View {
     private var takePhotoButton: some View {
         Button(action: onTakePhoto) {
             Label(
-                LocalizedStringResource("composer.attach.takePhoto", defaultValue: "Take Photo"),
+                LocalizedStringResource("composer.attach.takePhoto", defaultValue: "Take Photo", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "camera"
             )
         }
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.takePhoto",
             defaultValue: "Take Photo"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
     #endif
 
     private var photoLibraryButton: some View {
         Button(action: onPickLibrary) {
             Label(
-                LocalizedStringResource("composer.attach.photoLibrary", defaultValue: "Photo Library"),
+                LocalizedStringResource("composer.attach.photoLibrary", defaultValue: "Photo Library", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "photo.on.rectangle"
             )
         }
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.photoLibrary",
             defaultValue: "Photo Library"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     /// The UNIFIED document importer — accepts ANY file. The trailing ellipsis
@@ -176,27 +176,27 @@ struct AttachmentMenu: View {
     private var chooseFilesButton: some View {
         Button(action: onPickFiles) {
             Label(
-                LocalizedStringResource("composer.attach.chooseFiles.label", defaultValue: "Choose Files…"),
+                LocalizedStringResource("composer.attach.chooseFiles.label", defaultValue: "Choose Files…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "doc"
             )
         }
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.attach.chooseFiles.a11y",
             defaultValue: "Choose files"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     private func addLinkButton(action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(
-                LocalizedStringResource("workboard.material.addLink", defaultValue: "Add Link"),
+                LocalizedStringResource("workboard.material.addLink", defaultValue: "Add Link", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "link.badge.plus"
             )
         }
         .accessibilityLabel(Text(LocalizedStringResource(
             "workboard.material.addLink",
             defaultValue: "Add Link"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     /// "Set Up File Transfer…" — proactive discovery shown only when the bound
@@ -207,13 +207,13 @@ struct AttachmentMenu: View {
     private var setUpFileTransferButton: some View {
         Button(action: onSetUpFileTransfer) {
             Label(
-                LocalizedStringResource("fileTransfer.attach.setUp.label", defaultValue: "Set Up File Transfer…"),
+                LocalizedStringResource("fileTransfer.attach.setUp.label", defaultValue: "Set Up File Transfer…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "arrow.up.doc"
             )
         }
         .accessibilityLabel(Text(LocalizedStringResource(
             "fileTransfer.attach.setUp.a11y",
             defaultValue: "Set up file transfer"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 }

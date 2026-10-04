@@ -49,7 +49,7 @@ struct LockedComposerBar: View {
                     Text(LocalizedStringResource(
                         "composer.locked.placeholder",
                         defaultValue: "Setup required to send messages"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textTertiary)
                     Spacer(minLength: 0)
                 }
@@ -91,11 +91,11 @@ struct LockedComposerBar: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "composer.locked.a11yLabel",
             defaultValue: "Open AI setup"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .accessibilityHint(Text(LocalizedStringResource(
             "composer.locked.a11yHint",
             defaultValue: "Setup is required before you can send messages."
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .accessibilityIdentifier("composer.locked")
     }
 }

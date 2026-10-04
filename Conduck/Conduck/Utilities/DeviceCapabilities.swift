@@ -144,13 +144,13 @@ enum DeviceCapabilities {
         var displayName: String {
             switch self {
             case .actionButton:
-                return String(localized: "Action Button")
+                return String(localized: "Action Button", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             case .backTap:
-                return String(localized: "Back Tap")
+                return String(localized: "Back Tap", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             case .controlCenterShortcut:
-                return String(localized: "Control Center")
+                return String(localized: "Control Center", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             case .keyboardShortcut:
-                return String(localized: "Keyboard Shortcut")
+                return String(localized: "Keyboard Shortcut", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
         }
 
@@ -161,13 +161,13 @@ enum DeviceCapabilities {
         var setupCardTitle: String {
             switch self {
             case .actionButton:
-                return String(localized: "Set up Action Button") // xcstrings: setup-guide
+                return String(localized: "Set up Action Button", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings: setup-guide
             case .backTap:
-                return String(localized: "Set up Back Tap") // xcstrings: setup-guide
+                return String(localized: "Set up Back Tap", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings: setup-guide
             case .controlCenterShortcut:
-                return String(localized: "Set up Control Center") // xcstrings: setup-guide
+                return String(localized: "Set up Control Center", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings: setup-guide
             case .keyboardShortcut:
-                return String(localized: "Set up Keyboard Shortcut") // xcstrings: setup-guide
+                return String(localized: "Set up Keyboard Shortcut", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings: setup-guide
             }
         }
 
@@ -194,11 +194,11 @@ enum DeviceCapabilities {
         var completionTip: String? {
             switch self {
             case .actionButton:
-                return String(localized: "Tip: once your AI is connected, set up the Action Button in Settings to reach it from any app.") // xcstrings: onboarding-cleanup
+                return String(localized: "Tip: once your AI is connected, set up the Action Button in Settings to reach it from any app.", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings: onboarding-cleanup
             case .backTap:
-                return String(localized: "Tip: once your AI is connected, set up Back Tap in Settings to reach it from any app.") // xcstrings: onboarding-cleanup
+                return String(localized: "Tip: once your AI is connected, set up Back Tap in Settings to reach it from any app.", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings: onboarding-cleanup
             case .controlCenterShortcut:
-                return String(localized: "Tip: once your AI is connected, add Conduck to Control Center to reach it from any app.") // xcstrings: onboarding-cleanup
+                return String(localized: "Tip: once your AI is connected, add Conduck to Control Center to reach it from any app.", bundle: AppLocalization.bundle, locale: AppLocalization.locale) // xcstrings: onboarding-cleanup
             case .keyboardShortcut:
                 return nil
             }

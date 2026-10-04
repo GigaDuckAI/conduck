@@ -48,9 +48,9 @@ struct VoiceActiveProviderPicker: View {
     private var navTitle: LocalizedStringResource {
         switch direction {
         case .stt:
-            return LocalizedStringResource("settings.voice.chooser.stt.title", defaultValue: "Speech-to-Text")
+            return LocalizedStringResource("settings.voice.chooser.stt.title", defaultValue: "Speech-to-Text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .tts:
-            return LocalizedStringResource("settings.voice.chooser.tts.title", defaultValue: "Text-to-Speech")
+            return LocalizedStringResource("settings.voice.chooser.tts.title", defaultValue: "Text-to-Speech", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -60,12 +60,12 @@ struct VoiceActiveProviderPicker: View {
             return LocalizedStringResource(
                 "settings.voice.chooser.stt.footer",
                 defaultValue: "Pick which provider listens. Providers without a key open their setup screen."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .tts:
             return LocalizedStringResource(
                 "settings.voice.chooser.tts.footer",
                 defaultValue: "Pick which provider speaks replies. Apple is the offline fallback when a provider is unavailable."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -91,7 +91,7 @@ struct VoiceActiveProviderPicker: View {
                     Text(LocalizedStringResource(
                         "settings.voice.chooser.stt.language.footer",
                         defaultValue: "Applies to every speech-to-text provider."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
         }
@@ -124,7 +124,7 @@ struct VoiceActiveProviderPicker: View {
             showingLanguagePicker = true
         } label: {
             HStack {
-                Label(LocalizedStringResource("settings.language.hint.label", defaultValue: "Language hint"),
+                Label(LocalizedStringResource("settings.language.hint.label", defaultValue: "Language hint", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                       systemImage: "globe")
                     .foregroundStyle(AppColors.textPrimary)
                 Spacer()
@@ -154,7 +154,7 @@ struct VoiceActiveProviderPicker: View {
                 Text(option.displayName)
                     .foregroundStyle(AppColors.textTertiary)
                 Spacer()
-                Text(LocalizedStringResource("settings.voice.pill.coming", defaultValue: "Soon"))
+                Text(LocalizedStringResource("settings.voice.pill.coming", defaultValue: "Soon", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.textTertiary)
             }
@@ -200,7 +200,7 @@ struct VoiceActiveProviderPicker: View {
                     Text(option.displayName)
                         .foregroundStyle(AppColors.textSecondary)
                     Spacer()
-                    Text(LocalizedStringResource("settings.voice.chooser.setUp", defaultValue: "Set up…"))
+                    Text(LocalizedStringResource("settings.voice.chooser.setUp", defaultValue: "Set up…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSecondary)
                     Image(systemName: "chevron.right")

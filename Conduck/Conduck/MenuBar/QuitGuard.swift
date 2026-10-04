@@ -46,18 +46,18 @@ enum QuitGuard {
                 return String(
                     localized: "quitGuard.single.named.title",
                     defaultValue: "\(gatewayName) is still working on “\(threadTitle)”"
-                )  // xcstrings: session-continuation
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: session-continuation
             }
             if liveCount == 1 {
                 return String(
                     localized: "quitGuard.single.title.v2",
                     defaultValue: "Your AI is still answering"
-                )  // xcstrings: session-continuation
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: session-continuation
             }
             return String(
                 localized: "quitGuard.multiple.title",
                 defaultValue: "\(liveCount) conversations are still waiting on answers"
-            )  // xcstrings: session-continuation
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: session-continuation
         }
 
         /// Deliberately says NOTHING about the message being saved. The user
@@ -68,7 +68,7 @@ enum QuitGuard {
             String(
                 localized: "quitGuard.body",
                 defaultValue: "Quitting now ends the request. The answer can't be recovered — you'd have to ask again."
-            )  // xcstrings: session-continuation
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: session-continuation
         }
 
         /// The DESTRUCTIVE choice. Rendered first and with no key equivalent so
@@ -80,7 +80,7 @@ enum QuitGuard {
             String(
                 localized: "quitGuard.button.keepWaiting",
                 defaultValue: "Keep Waiting"
-            )  // xcstrings: session-continuation
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: session-continuation
         }
     }
 
@@ -92,7 +92,7 @@ enum QuitGuard {
         String(
             localized: "quitGuard.button.quit",
             defaultValue: "Quit Anyway"
-        )  // xcstrings: session-continuation
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: session-continuation
     }
 
     /// The choice a capture with nowhere durable to be puts to the person.
@@ -120,11 +120,11 @@ enum QuitGuard {
                 ? String(
                     localized: "quitGuard.unsaved.single.title.v2",
                     defaultValue: "A capture hasn’t reached your desk"
-                )  // xcstrings: work-capture
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: work-capture
                 : String(
                     localized: "quitGuard.unsaved.multiple.title.v2",
                     defaultValue: "\(count) captures haven’t reached your desk"
-                )  // xcstrings: work-capture
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: work-capture
         }
 
         /// Names the loss and the way out in one line. It promises nothing about
@@ -134,7 +134,7 @@ enum QuitGuard {
             String(
                 localized: "quitGuard.unsaved.body.v2",
                 defaultValue: "Quitting now loses what was captured. Try Again is still on the capture."
-            )  // xcstrings: work-capture
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: work-capture
         }
 
         var quitButtonTitle: String { QuitGuard.quitAnywayTitle }
@@ -144,7 +144,7 @@ enum QuitGuard {
             String(
                 localized: "quitGuard.unsaved.button.keep.v2",
                 defaultValue: "Keep the Capture"
-            )  // xcstrings: work-capture
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: work-capture
         }
     }
 

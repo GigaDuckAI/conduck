@@ -9,33 +9,33 @@ import Foundation
 nonisolated enum WorkDeskCopy {
     static func conversationUses(_ count: Int) -> LocalizedStringResource {
         if count == 1 {
-            return LocalizedStringResource("workdesk.material.used.once", defaultValue: "Used in 1 conversation")
+            return LocalizedStringResource("workdesk.material.used.once", defaultValue: "Used in 1 conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
-        return LocalizedStringResource("workdesk.material.used.count", defaultValue: "Used in \(count) conversations")
+        return LocalizedStringResource("workdesk.material.used.count", defaultValue: "Used in \(count) conversations", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     static func deleteProjectAndMaterials(_ count: Int) -> LocalizedStringResource {
         if count == 0 {
-            return LocalizedStringResource("workdesk.project.delete.empty", defaultValue: "Delete project")
+            return LocalizedStringResource("workdesk.project.delete.empty", defaultValue: "Delete project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         if count == 1 {
-            return LocalizedStringResource("workdesk.project.delete.one", defaultValue: "Delete project and 1 material")
+            return LocalizedStringResource("workdesk.project.delete.one", defaultValue: "Delete project and 1 material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
-        return LocalizedStringResource("workdesk.project.delete.materials", defaultValue: "Delete project and \(count) materials")
+        return LocalizedStringResource("workdesk.project.delete.materials", defaultValue: "Delete project and \(count) materials", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     static func retainedConversationCount(_ count: Int) -> LocalizedStringResource {
         if count == 1 {
-            return LocalizedStringResource("workdesk.project.delete.conversation.one", defaultValue: "Its 1 conversation will remain in Chats.")
+            return LocalizedStringResource("workdesk.project.delete.conversation.one", defaultValue: "Its 1 conversation will remain in Chats.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
-        return LocalizedStringResource("workdesk.project.delete.conversations", defaultValue: "Its \(count) conversations will remain in Chats.")
+        return LocalizedStringResource("workdesk.project.delete.conversations", defaultValue: "Its \(count) conversations will remain in Chats.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     static func materialCount(_ count: Int) -> LocalizedStringResource {
         if count == 1 {
-            return LocalizedStringResource("workdesk.material.count.one", defaultValue: "1 material")
+            return LocalizedStringResource("workdesk.material.count.one", defaultValue: "1 material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
-        return LocalizedStringResource("workdesk.material.count", defaultValue: "\(count) materials")
+        return LocalizedStringResource("workdesk.material.count", defaultValue: "\(count) materials", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// What a project holds, for the line under its title. It reports the
@@ -54,8 +54,8 @@ nonisolated enum WorkDeskCopy {
 
     static func projectBriefState(hasBrief: Bool) -> LocalizedStringResource {
         if hasBrief {
-            return LocalizedStringResource("workdesk.project.context.saved", defaultValue: "Project context")
+            return LocalizedStringResource("workdesk.project.context.saved", defaultValue: "Project context", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
-        return LocalizedStringResource("workdesk.project.context.add", defaultValue: "Add context")
+        return LocalizedStringResource("workdesk.project.context.add", defaultValue: "Add context", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 }

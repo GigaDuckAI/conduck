@@ -34,7 +34,7 @@ struct ConversationProjectHeaderLine: View {
     }
 
     private var showInWork: String {
-        String(localized: "conversations.thread.showInWork", defaultValue: "Show in Work")  // xcstrings: chat-ui
+        String(localized: "conversations.thread.showInWork", defaultValue: "Show in Work", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 
     var body: some View {
@@ -89,7 +89,7 @@ struct ConversationProjectHeaderLine: View {
 
     private var spokenLine: String {
         let membership = String(localized: "conversations.row.a11y.inProject",
-                                defaultValue: "In project \(name)")  // xcstrings: chat-ui
+                                defaultValue: "In project \(name)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         return mark.isArchived ? "\(membership). \(MessageRowFormatters.archivedWord)" : membership
     }
 }

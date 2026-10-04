@@ -62,7 +62,7 @@ struct PersonalAIConnectRows: View {
                         LocalizedStringResource(
                             "settings.personalAI.connect.guidedSetup.label",
                             defaultValue: "Guided Setup"
-                        )
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     )
                     .font(.body.weight(.semibold))
                     .foregroundStyle(AppColors.guidedSetupBlue)
@@ -75,7 +75,7 @@ struct PersonalAIConnectRows: View {
                         LocalizedStringResource(
                             "settings.personalAI.connect.guidedSetup.subtitle",
                             defaultValue: "Connect your AI in a few steps."
-                        )
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     )
                     .font(.footnote)
                     .foregroundStyle(AppColors.textSecondary)

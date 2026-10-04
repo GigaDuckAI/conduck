@@ -272,7 +272,7 @@ struct WorkboardMaterialListRow: View {
         .pointerIconButton(size: WorkboardMetrics.touchTarget, shape: .circle)
         .help(String(localized: LocalizedStringResource(
             "workboard.material.card.more", defaultValue: "Card actions"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         // All menu actions are available directly on the accessible row.
         .accessibilityHidden(true)
     }
@@ -286,7 +286,7 @@ struct WorkboardMaterialListRow: View {
         }
         if WorkboardCardActionPolicy.allows(.details, when: material.availability) {
             Button(action: openMaterial) {
-                Label(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), systemImage: "arrow.up.forward.app")
+                Label(LocalizedStringResource("workboard.material.open", defaultValue: "Open", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "arrow.up.forward.app")
             }
             if WorkboardCardActionPolicy.allows(.open, when: material.availability), let onShare {
                 Button(action: onShare) {
@@ -311,7 +311,7 @@ struct WorkboardMaterialListRow: View {
         }
         if WorkboardCardActionPolicy.allows(.reattach, when: material.availability), let onReattach {
             Button(action: onReattach) {
-                Label(LocalizedStringResource("workboard.material.reattach.action", defaultValue: "Reattach or Replace"), systemImage: "paperclip")
+                Label(LocalizedStringResource("workboard.material.reattach.action", defaultValue: "Reattach or Replace", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "paperclip")
             }
         }
         if let organizationActions {
@@ -322,19 +322,19 @@ struct WorkboardMaterialListRow: View {
             Divider()
             if let onMoveEarlier {
                 Button(action: onMoveEarlier) {
-                    Label(LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"), systemImage: "arrow.up")
+                    Label(LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "arrow.up")
                 }
             }
             if let onMoveLater {
                 Button(action: onMoveLater) {
-                    Label(LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later"), systemImage: "arrow.down")
+                    Label(LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "arrow.down")
                 }
             }
         }
         if let onRemove {
             Divider()
             Button(role: .destructive, action: onRemove) {
-                Label(LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"), systemImage: "trash")
+                Label(LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "trash")
             }
         }
     }
@@ -346,7 +346,7 @@ struct WorkboardMaterialListRow: View {
         }
         if WorkboardCardActionPolicy.allows(.details, when: material.availability) {
             if material.kind == .audio {
-                Button(LocalizedStringResource("workboard.material.open", defaultValue: "Open"), action: openMaterial)
+                Button(LocalizedStringResource("workboard.material.open", defaultValue: "Open", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), action: openMaterial)
             }
             if WorkboardCardActionPolicy.allows(.open, when: material.availability), let onShare {
                 Button(
@@ -363,16 +363,16 @@ struct WorkboardMaterialListRow: View {
             }
         }
         if WorkboardCardActionPolicy.allows(.reattach, when: material.availability), let onReattach {
-            Button(LocalizedStringResource("workboard.material.reattach.action", defaultValue: "Reattach or Replace"), action: onReattach)
+            Button(LocalizedStringResource("workboard.material.reattach.action", defaultValue: "Reattach or Replace", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), action: onReattach)
         }
         if let onMoveEarlier {
-            Button(LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"), action: onMoveEarlier)
+            Button(LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), action: onMoveEarlier)
         }
         if let onMoveLater {
-            Button(LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later"), action: onMoveLater)
+            Button(LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), action: onMoveLater)
         }
         if let onRemove {
-            Button(LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"), action: onRemove)
+            Button(LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), action: onRemove)
         }
     }
 
@@ -506,7 +506,7 @@ struct WorkboardMaterialListRow: View {
     private var availabilityLabel: LocalizedStringResource? {
         guard material.availability != .available else { return nil }
         if material.availability == .unavailableOnThisDevice, onReattach == nil {
-            return LocalizedStringResource("workboard.audio.unavailableHere", defaultValue: "Not on this device")
+            return LocalizedStringResource("workboard.audio.unavailableHere", defaultValue: "Not on this device", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return WorkboardCardAccessibility.availabilityLabel(for: material.availability)
     }

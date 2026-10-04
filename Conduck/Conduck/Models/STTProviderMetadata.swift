@@ -73,106 +73,106 @@ enum STTProviderRegistry {
     /// Mistral Voxtral V2 — `voxtral-mini-2602`. EU jurisdiction;
     /// 13 languages; billing-fatal 429.
     // DO NOT RENAME — Keychain account suffixes depend on this string
-    static let mistralVoxtral = STTProviderMetadata(
+    static var mistralVoxtral: STTProviderMetadata { STTProviderMetadata(
         id: "mistral-voxtral",
         displayName: "Mistral",
         consoleURL: URL(string: "https://console.mistral.ai/api-keys")!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.mistralVoxtral.placeholder",
             defaultValue: "Paste your Mistral API key"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         languageNote: LocalizedStringResource(
             "settings.stt.provider.mistralVoxtral.language",
             defaultValue: "13 languages · diarization + word timestamps"
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// OpenAI `gpt-4o-transcribe` — broadest language coverage,
     /// transient 429 (rate-limited not billing).
     // DO NOT RENAME — Keychain account suffixes depend on this string
-    static let openAI = STTProviderMetadata(
+    static var openAI: STTProviderMetadata { STTProviderMetadata(
         id: "openai-gpt4o-transcribe",
         displayName: "OpenAI",
         consoleURL: URL(string: "https://platform.openai.com/api-keys")!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.openai.placeholder",
             defaultValue: "sk-..."
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         languageNote: LocalizedStringResource(
             "settings.stt.provider.openai.language",
             defaultValue: "99+ languages · highest accuracy on long audio"
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// ElevenLabs Scribe v2.
     // DO NOT RENAME — Keychain account suffixes depend on this string
-    static let elevenLabs = STTProviderMetadata(
+    static var elevenLabs: STTProviderMetadata { STTProviderMetadata(
         id: "elevenlabs-scribe-v2",
         displayName: "ElevenLabs",
         consoleURL: URL(string: "https://elevenlabs.io/app/settings/api-keys")!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.elevenLabs.placeholder",
             defaultValue: "Paste your ElevenLabs API key"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         languageNote: LocalizedStringResource(
             "settings.stt.provider.elevenLabs.language",
             defaultValue: "99 languages · speaker labels + audio-event tags"
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Google Gemini — dedicated speech model on the JSON Interactions
     /// endpoint, inline-base64 audio. The `id` is a frozen storage key, not a
     /// model reference (see `STTProvider.gemini`).
     // DO NOT RENAME — Keychain account suffixes depend on this string
-    static let gemini = STTProviderMetadata(
+    static var gemini: STTProviderMetadata { STTProviderMetadata(
         id: "gemini-3-1-flash-lite",
         displayName: "Gemini",
         consoleURL: URL(string: "https://aistudio.google.com/apikey")!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.gemini.placeholder",
             defaultValue: "Paste your Gemini API key"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         languageNote: LocalizedStringResource(
             "settings.stt.provider.gemini.language.v2",
             defaultValue: "100+ languages · dedicated speech model"
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Alibaba Qwen3-ASR-Flash — JSON family, DashScope-hosted,
     /// Singapore default endpoint.
     // DO NOT RENAME — Keychain account suffixes depend on this string
-    static let qwen = STTProviderMetadata(
+    static var qwen: STTProviderMetadata { STTProviderMetadata(
         id: "qwen3-asr-flash",
         displayName: "Qwen",
         consoleURL: URL(string: "https://dashscope.console.alibabacloud.com/apiKey")!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.qwen.placeholder",
             defaultValue: "Paste your DashScope API key"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         languageNote: LocalizedStringResource(
             "settings.stt.provider.qwen.language",
             defaultValue: "11 languages · strongest on Mandarin / CJK"
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// OpenRouter hosted voice — one account/key for chat (the hosted-model
     /// gateway) AND voice (STT + TTS). The model is user-overridable (the
     /// catalog grows over time); console URL points at the API-keys dashboard.
     // DO NOT RENAME — Keychain account suffix `stt.apiKey.openrouter-stt`
     // depends on this string.
-    static let openRouter = STTProviderMetadata(
+    static var openRouter: STTProviderMetadata { STTProviderMetadata(
         id: "openrouter-stt",
         displayName: "OpenRouter",
         consoleURL: URL(string: Constants.openRouterKeysConsoleURLString)!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.openRouter.placeholder",
             defaultValue: "sk-or-…"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         languageNote: LocalizedStringResource(
             "settings.stt.provider.openRouter.language",
             defaultValue: "Any compatible model · one key for chat + voice"
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Apple on-device Speech (iOS / iPadOS / macOS / CarPlay 26+; NOT on
     /// watchOS — see `STTProvider.appleOnDevice`). Default for fresh installs
@@ -181,20 +181,20 @@ enum STTProviderRegistry {
     /// key console exists) — points to Apple's published support guide.
     // DO NOT RENAME — Keychain account suffix `stt.apiKey.apple-on-device`
     // depends on this string (even though the slot is never written).
-    static let appleOnDevice = STTProviderMetadata(
+    static var appleOnDevice: STTProviderMetadata { STTProviderMetadata(
         id: "apple-on-device",
-        displayName: "Apple (On-Device)",
+        displayName: String(localized: "Apple (On-Device)", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
         consoleURL: URL(string: "https://support.apple.com/guide/iphone/use-dictation-iphd5cf94b3a/ios")!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.apple.placeholder",
             defaultValue: "No API key required"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         languageNote: LocalizedStringResource(
             "settings.stt.provider.apple.language.v2",
             defaultValue: "On-device · standard dictation, optional high-quality download"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         isOnDevice: true
-    )
+    ) }
 
     /// Custom OpenAI-compatible STT endpoint — BYO self-hosted server. The
     /// 7th entry; `id` matches `STTProvider.customOpenAICompat`. Unlike the
@@ -205,24 +205,24 @@ enum STTProviderRegistry {
     /// servers emulate.
     // DO NOT RENAME — Keychain account suffix `stt.apiKey.custom-openai`
     // depends on this string.
-    static let customOpenAI = STTProviderMetadata(
+    static var customOpenAI: STTProviderMetadata { STTProviderMetadata(
         id: "custom-openai",
-        displayName: "Custom (OpenAI-compatible)",
+        displayName: String(localized: "Custom (OpenAI-compatible)", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
         consoleURL: URL(string: "https://platform.openai.com/docs/api-reference/audio/createTranscription")!,
         keyPlaceholder: LocalizedStringResource(
             "settings.stt.provider.custom.placeholder",
             defaultValue: "Paste your endpoint's API key (optional for keyless servers)"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         languageNote: LocalizedStringResource(
             "settings.stt.provider.custom.language",
             defaultValue: "Self-hosted Whisper, faster-whisper, Speaches, LocalAI…"
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Full display order (matches Settings picker row order). Apple is FIRST
     /// — recommended default for fresh installs. Count is 7
     /// (the trailing `customOpenAI` BYO endpoint).
-    static let all: [STTProviderMetadata] = [
+    static var all: [STTProviderMetadata] { [
         appleOnDevice,
         mistralVoxtral,
         openAI,
@@ -234,7 +234,7 @@ enum STTProviderRegistry {
         // so re-listing is a one-line revert; the wire/display parity test
         // requires this array to mirror `STTProvider.allRegistered` exactly.
         customOpenAI,
-    ]
+    ] }
 
     /// Look up display metadata by provider ID. Returns nil for unknown
     /// IDs — callers (Settings UI) may render a graceful fallback.

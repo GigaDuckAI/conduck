@@ -217,19 +217,19 @@ extension ConversationStore {
                     fileLaneID: candidate.message.outputScanLaneID, createdAt: attachment.createdAt,
                     isRemoteReference: attachment.isServerReference)
                 let draft: WorkMaterialDraft
-                let name = attachment.filename ?? String(localized: "workdesk.result.file", defaultValue: "Returned file")
+                let name = attachment.filename ?? String(localized: "workdesk.result.file", defaultValue: "Returned file", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 if attachment.isServerReference {
                     // Ownerless legacy refs cannot be represented as retrievable
                     // results, and no preview blob is mistaken for the real file.
                     guard source.fileLaneID != nil, attachment.storedKey != nil else { continue }
                     draft = WorkMaterialDraft(id: materialID, kind: .note, title: name,
-                        caption: String(localized: "workdesk.result.remote", defaultValue: "On gateway · Open source conversation"),
+                        caption: String(localized: "workdesk.result.remote", defaultValue: "On gateway · Open source conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                         storageMode: .metadataOnly, createdAt: attachment.createdAt)
                 } else {
                     if payloads == nil { payloads = (try? await loadLocalAttachmentPayloads(for: candidate.message.id)) ?? [:] }
                     guard let data = payloads?[attachment.id] else { continue }
                     draft = WorkMaterialDraft(id: materialID, kind: attachment.mimeType.hasPrefix("image/") ? .image : .file,
-                        title: name, caption: String(localized: "workdesk.result.saved", defaultValue: "From project conversation"),
+                        title: name, caption: String(localized: "workdesk.result.saved", defaultValue: "From project conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                         filename: name, mimeType: attachment.mimeType, payload: data,
                         thumbnailData: attachment.thumbnailData, width: attachment.width, height: attachment.height,
                         byteSize: Int64(data.count), createdAt: attachment.createdAt)

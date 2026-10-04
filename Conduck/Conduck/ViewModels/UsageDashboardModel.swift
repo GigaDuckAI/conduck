@@ -224,13 +224,13 @@ final class UsageDashboardModel {
         var title: LocalizedStringResource {
             switch self {
             case .week: return LocalizedStringResource(
-                "settings.usage.range.week", defaultValue: "7 days")
+                "settings.usage.range.week", defaultValue: "7 days", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .month: return LocalizedStringResource(
-                "settings.usage.range.month", defaultValue: "30 days")
+                "settings.usage.range.month", defaultValue: "30 days", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .quarter: return LocalizedStringResource(
-                "settings.usage.range.quarter", defaultValue: "90 days")
+                "settings.usage.range.quarter", defaultValue: "90 days", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .all: return LocalizedStringResource(
-                "settings.usage.range.all", defaultValue: "All")
+                "settings.usage.range.all", defaultValue: "All", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             }
         }
     }
@@ -516,7 +516,7 @@ final class UsageDashboardModel {
             loadError = String(
                 localized: "settings.usage.error.load",
                 defaultValue: "Couldn't load your usage. Try again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
 
         hasLoaded = true
@@ -703,7 +703,7 @@ final class UsageDashboardModel {
             clearUsageHistoryError = String(
                 localized: "settings.usage.error.clear",
                 defaultValue: "Couldn't remove every record. Conduck will finish next time you open this screen."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
 
         isClearingUsageHistory = false

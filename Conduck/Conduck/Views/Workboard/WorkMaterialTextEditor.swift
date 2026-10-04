@@ -151,11 +151,11 @@ struct WorkMaterialTextEditor: View {
 
     private var heading: LocalizedStringResource {
         if session.id.field == .annotation {
-            return LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes")
+            return LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return session.kind == .transcript
-            ? LocalizedStringResource("workboard.material.transcript.edit", defaultValue: "Edit transcript")
-            : LocalizedStringResource("workboard.material.text.edit", defaultValue: "Edit text")
+            ? LocalizedStringResource("workboard.material.transcript.edit", defaultValue: "Edit transcript", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("workboard.material.text.edit", defaultValue: "Edit text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     var body: some View {
@@ -164,11 +164,11 @@ struct WorkMaterialTextEditor: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(verbatim: session.title).font(.headline)
                     if session.id.field == .annotation {
-                        Text(LocalizedStringResource("workboard.material.notes.explanation", defaultValue: "Keep context with this material. These notes are included when you bring it into a new conversation."))
+                        Text(LocalizedStringResource("workboard.material.notes.explanation", defaultValue: "Keep context with this material. These notes are included when you bring it into a new conversation.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.callout).foregroundStyle(AppColors.textSecondary)
                     }
                     TextField(text: $session.text, axis: .vertical) {
-                        Text(LocalizedStringResource("workboard.material.notes.placeholder", defaultValue: "Write here…"))
+                        Text(LocalizedStringResource("workboard.material.notes.placeholder", defaultValue: "Write here…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }
                     .lineLimit(10...30)
                     .padding(16)
@@ -178,9 +178,9 @@ struct WorkMaterialTextEditor: View {
                     if session.isLoading { ProgressView() }
                     if let error = session.errorMessage {
                         Text(verbatim: error).font(.callout).foregroundStyle(.red)
-                        Text(LocalizedStringResource("workboard.material.notes.draftKept", defaultValue: "Your changes are still here. Try saving again, or load the saved text to replace your changes."))
+                        Text(LocalizedStringResource("workboard.material.notes.draftKept", defaultValue: "Your changes are still here. Try saving again, or load the saved text to replace your changes.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption).foregroundStyle(AppColors.textSecondary)
-                        Button(LocalizedStringResource("workboard.material.notes.reload", defaultValue: "Load saved text…")) {
+                        Button(LocalizedStringResource("workboard.material.notes.reload", defaultValue: "Load saved text…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                             confirmsReload = true
                         }.inlineLinkButton()
                     }
@@ -194,12 +194,12 @@ struct WorkMaterialTextEditor: View {
             .navigationTitle(Text(heading))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                    Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         session.cancel(); dismiss()
                     }.disabled(session.isBusy)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(LocalizedStringResource("common.save", defaultValue: "Save")) {
+                    Button(LocalizedStringResource("common.save", defaultValue: "Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         Task { if await session.save(), !session.isDirty { dismiss() } }
                     }.disabled(session.isBusy || !session.isDirty)
                 }
@@ -207,8 +207,8 @@ struct WorkMaterialTextEditor: View {
         }
         .interactiveDismissDisabled(session.isDirty || session.isBusy)
         .task { await session.loadLatest() }
-        .confirmationDialog(Text(LocalizedStringResource("workboard.material.notes.reloadConfirm", defaultValue: "Replace your changes with the saved text?")), isPresented: $confirmsReload, titleVisibility: .visible) {
-            Button(LocalizedStringResource("workboard.material.notes.reloadAction", defaultValue: "Load saved text"), role: .destructive) {
+        .confirmationDialog(Text(LocalizedStringResource("workboard.material.notes.reloadConfirm", defaultValue: "Replace your changes with the saved text?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), isPresented: $confirmsReload, titleVisibility: .visible) {
+            Button(LocalizedStringResource("workboard.material.notes.reloadAction", defaultValue: "Load saved text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .destructive) {
                 Task { await session.loadLatest(discardDraft: true) }
             }
         }
@@ -226,38 +226,38 @@ struct WorkMaterialInlineNotesEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes"))
+            Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline.weight(.semibold))
             TextField(text: $session.text, axis: .vertical) {
-                Text(LocalizedStringResource("workboard.material.notes.placeholder", defaultValue: "Write here…"))
+                Text(LocalizedStringResource("workboard.material.notes.placeholder", defaultValue: "Write here…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             .lineLimit(3...8)
             .padding(12)
             .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 10))
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes")))
+            .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .disabled(session.isBusy)
             if let error = session.errorMessage {
                 Text(verbatim: error).font(.caption).foregroundStyle(.red)
-                Text(LocalizedStringResource("workboard.material.notes.draftKept", defaultValue: "Your changes are still here. Try saving again, or load the saved text to replace your changes."))
+                Text(LocalizedStringResource("workboard.material.notes.draftKept", defaultValue: "Your changes are still here. Try saving again, or load the saved text to replace your changes.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption).foregroundStyle(AppColors.textSecondary)
-                Button(LocalizedStringResource("workboard.material.notes.reload", defaultValue: "Load saved text…")) {
+                Button(LocalizedStringResource("workboard.material.notes.reload", defaultValue: "Load saved text…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     confirmsReload = true
                 }.inlineLinkButton().disabled(session.isBusy)
             }
             HStack {
                 if session.isBusy { ProgressView().controlSize(.small) }
                 Spacer()
-                Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel")) {
+                Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     session.cancel(); onFinish()
                 }.inlineLinkButton().disabled(session.isBusy)
-                Button(LocalizedStringResource("common.save", defaultValue: "Save")) {
+                Button(LocalizedStringResource("common.save", defaultValue: "Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     Task { if await session.save(), !session.isDirty { onFinish() } }
                 }.buttonStyle(.borderedProminent).disabled(session.isBusy || !session.isDirty)
             }
         }
         .task { await session.loadLatest() }
-        .confirmationDialog(Text(LocalizedStringResource("workboard.material.notes.reloadConfirm", defaultValue: "Replace your changes with the saved text?")), isPresented: $confirmsReload, titleVisibility: .visible) {
-            Button(LocalizedStringResource("workboard.material.notes.reloadAction", defaultValue: "Load saved text"), role: .destructive) {
+        .confirmationDialog(Text(LocalizedStringResource("workboard.material.notes.reloadConfirm", defaultValue: "Replace your changes with the saved text?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), isPresented: $confirmsReload, titleVisibility: .visible) {
+            Button(LocalizedStringResource("workboard.material.notes.reloadAction", defaultValue: "Load saved text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .destructive) {
                 Task { await session.loadLatest(discardDraft: true) }
             }
         }

@@ -38,7 +38,7 @@ final class WorkDeskOrganizationUndoController {
             guard let organization, let manager else { return }
             target.apply(Task { change }, organization: organization, manager: manager)
         }
-        manager.setActionName(String(localized: "workdesk.undo.organization", defaultValue: "Organise materials"))
+        manager.setActionName(String(localized: "workdesk.undo.organization", defaultValue: "Organise materials", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
     }
 
     private func apply(_ operation: Task<WorkDeskLocationUndo?, Never>, organization: WorkDeskOrganization,
@@ -58,12 +58,12 @@ final class WorkDeskOrganizationUndoController {
             guard let organization, let manager else { return }
             target.apply(inverse, organization: organization, manager: manager)
         }
-        manager.setActionName(String(localized: "workdesk.undo.organization", defaultValue: "Organise materials"))
+        manager.setActionName(String(localized: "workdesk.undo.organization", defaultValue: "Organise materials", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
     }
 
     func undoLatest(organization: WorkDeskOrganization, manager: UndoManager? = nil) async {
         guard !isApplying, let receipt else { return }
-        let name = String(localized: "workdesk.undo.organization", defaultValue: "Organise materials")
+        let name = String(localized: "workdesk.undo.organization", defaultValue: "Organise materials", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         if let manager, manager.canUndo, manager.undoActionName == name {
             manager.undo()
             return
@@ -159,9 +159,9 @@ struct WorkDeskOrganizationUndo: ViewModifier {
             .overlay(alignment: .bottomLeading) {
                 if isActive, controller.showsUndo {
                     HStack(spacing: 12) {
-                        Text(LocalizedStringResource("workdesk.undo.updated", defaultValue: "Materials organised"))
+                        Text(LocalizedStringResource("workdesk.undo.updated", defaultValue: "Materials organised", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline)
-                        Button(LocalizedStringResource("workdesk.undo.action", defaultValue: "Undo")) {
+                        Button(LocalizedStringResource("workdesk.undo.action", defaultValue: "Undo", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                             Task { await controller.undoLatest(organization: workspace.organization, manager: manager) }
                         }
                         .inlineLinkButton()
@@ -171,7 +171,7 @@ struct WorkDeskOrganizationUndo: ViewModifier {
                         Button { controller.showsUndo = false } label: {
                             Image(systemName: "xmark").frame(width: 32, height: 44)
                         }.pointerIconButton(size: 32)
-                        .accessibilityLabel(Text(LocalizedStringResource("workdesk.undo.dismiss", defaultValue: "Dismiss undo message")))
+                        .accessibilityLabel(Text(LocalizedStringResource("workdesk.undo.dismiss", defaultValue: "Dismiss undo message", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     }
                     .padding(.leading, 16).padding(.trailing, 6)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))

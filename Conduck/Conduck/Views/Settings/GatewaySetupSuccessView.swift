@@ -194,7 +194,7 @@ struct GatewaySetupSuccessView: View {
                 (Text(verbatim: name)
                     + Text(LocalizedStringResource(
                         "gateway.setup.success.isReadySuffix",
-                        defaultValue: " is ready"))) // xcstrings: gateway-setup-success
+                        defaultValue: " is ready", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))) // xcstrings: gateway-setup-success
                     .onboardingScaledFont(.headline)
                     .foregroundStyle(AppColors.textPrimary)
                     .lineLimit(3)
@@ -233,7 +233,7 @@ struct GatewaySetupSuccessView: View {
                         .accessibilityHidden(true)
                     (Text(LocalizedStringResource(
                         "gateway.setup.success.newChats.usingPrefix",
-                        defaultValue: "Default for new chats · ")) // xcstrings: gateway-setup-success
+                        defaultValue: "Default for new chats · ", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) // xcstrings: gateway-setup-success
                         + Text(verbatim: name))
                         .onboardingScaledFont(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
@@ -282,15 +282,15 @@ struct GatewaySetupSuccessView: View {
         case .ready:
             return LocalizedStringResource(
                 "gateway.setup.success.fileSharing.on",
-                defaultValue: "File transfer · On")
+                defaultValue: "File transfer · On", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .readyUploadsOnly:
             return LocalizedStringResource(
                 "gateway.setup.success.fileSharing.uploadsOnly",
-                defaultValue: "File transfer · Uploads only")
+                defaultValue: "File transfer · Uploads only", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .needsAttention, .saved, .recommended, .optional, .unsupported:
             return LocalizedStringResource(
                 "gateway.setup.success.fileSharing.off",
-                defaultValue: "File transfer · Off")
+                defaultValue: "File transfer · Off", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

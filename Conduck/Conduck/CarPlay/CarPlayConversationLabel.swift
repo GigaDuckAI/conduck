@@ -56,7 +56,7 @@ enum CarPlayConversationLabel {
         }
         // xcstrings: reuse existing key — avoids a casing-only symbol
         // collision with "New Conversation")
-        return String(localized: "New conversation")
+        return String(localized: "New conversation", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Collapse a raw first-user-turn string into a single-line, length-capped
@@ -123,7 +123,7 @@ enum CarPlayConversationLabel {
         let date = relativeDate(lastActivityAt, now: now)
         guard let name = projectName(from: projectTitle) else { return date }
         return String(localized: "carplay.recent.project.detail",
-                      defaultValue: "\(date) · \(name)")  // xcstrings
+                      defaultValue: "\(date) · \(name)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
     }
 
     /// Format a conversation's `lastActivityAt` as a short relative date for
@@ -133,6 +133,7 @@ enum CarPlayConversationLabel {
     /// tests.
     static func relativeDate(_ date: Date, now: Date = Date()) -> String {
         let formatter = RelativeDateTimeFormatter()
+        formatter.locale = AppLocalization.locale
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: now)
     }

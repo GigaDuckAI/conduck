@@ -74,7 +74,7 @@ struct SettingsStatusMark: View {
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "settings.status.configured.a11y",
                         defaultValue: "Configured"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
         }
     }

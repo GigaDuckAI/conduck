@@ -23,14 +23,14 @@ struct ContentSyncSettingsSection: View {
         group
             .confirmationDialog(
                 Text(pendingEnabled == true
-                    ? LocalizedStringResource("settings.contentSync.enable.title", defaultValue: "Turn on content sync?")
-                    : LocalizedStringResource("settings.contentSync.disable.title", defaultValue: "Turn off content sync?")),
+                    ? LocalizedStringResource("settings.contentSync.enable.title", defaultValue: "Turn on content sync?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("settings.contentSync.disable.title", defaultValue: "Turn off content sync?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 isPresented: $showingConfirmation,
                 titleVisibility: .visible
             ) {
                 Button(pendingEnabled == true
-                    ? LocalizedStringResource("settings.contentSync.enable.action", defaultValue: "Turn On")
-                    : LocalizedStringResource("settings.contentSync.disable.action", defaultValue: "Turn Off")) {
+                    ? LocalizedStringResource("settings.contentSync.enable.action", defaultValue: "Turn On", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("settings.contentSync.disable.action", defaultValue: "Turn Off", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     do {
                         _ = try ContentSyncPreferenceStore.shared.setEnabled(pendingEnabled)
                         savingFailed = false
@@ -39,7 +39,7 @@ struct ContentSyncSettingsSection: View {
                     }
                     showingConfirmation = false
                 }
-                Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel"), role: .cancel) {
+                Button(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) {
                     showingConfirmation = false
                 }
             } message: {
@@ -75,7 +75,7 @@ struct ContentSyncSettingsSection: View {
             }
             information.settingsCardPassiveRow()
         } header: {
-            Text(LocalizedStringResource("sync.icloud.settings.header", defaultValue: "Sync"))
+            Text(LocalizedStringResource("sync.icloud.settings.header", defaultValue: "Sync", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         #else
         Section {
@@ -83,7 +83,7 @@ struct ContentSyncSettingsSection: View {
                 .tint(AppColors.brandAmber)
             information
         } header: {
-            Text(LocalizedStringResource("sync.icloud.settings.header", defaultValue: "Sync"))
+            Text(LocalizedStringResource("sync.icloud.settings.header", defaultValue: "Sync", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         #endif
     }
@@ -91,7 +91,7 @@ struct ContentSyncSettingsSection: View {
     private var information: some View {
         VStack(alignment: .leading, spacing: 10) {
             if savingFailed {
-                Text(LocalizedStringResource("settings.contentSync.save.failed", defaultValue: "Couldn’t save the sync setting. Try again."))
+                Text(LocalizedStringResource("settings.contentSync.save.failed", defaultValue: "Couldn’t save the sync setting. Try again.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.sunsetOrange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -104,7 +104,7 @@ struct ContentSyncSettingsSection: View {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text(runtime.statusMessage ?? LocalizedStringResource(
-                        "settings.contentSync.applying", defaultValue: "Updating content sync on this device…"))
+                        "settings.contentSync.applying", defaultValue: "Updating content sync on this device…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption)
                 }
             } else if let message = runtime.statusMessage {
@@ -113,12 +113,12 @@ struct ContentSyncSettingsSection: View {
                     .foregroundStyle(runtime.state == .failed ? AppColors.sunsetOrange : AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if runtime.state == .off {
-                Text(LocalizedStringResource("settings.contentSync.effectiveOff", defaultValue: "Content sync is off on this device."))
+                Text(LocalizedStringResource("settings.contentSync.effectiveOff", defaultValue: "Content sync is off on this device.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
             }
             if runtime.state == .failed {
-                Button(LocalizedStringResource("common.retry", defaultValue: "Try again")) {
+                Button(LocalizedStringResource("common.retry", defaultValue: "Try again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     Task { await runtime.retry() }
                 }
                 .inlineLinkButton()

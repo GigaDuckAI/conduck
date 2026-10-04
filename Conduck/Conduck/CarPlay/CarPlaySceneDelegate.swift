@@ -99,6 +99,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// Observer token for `.conversationsDidChange` so the picker refreshes when
     /// a turn lands (this device or — when sync is on — another device).
     private var conversationsObserver: NSObjectProtocol?
+    private var languageObserver: NSObjectProtocol?
 
     /// SESSION-LOCAL (this-drive-only) gateway override. CarPlay must NOT write
     /// the device-local global default (that silently re-points iPhone/iPad/Mac
@@ -192,7 +193,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
 
         // Build the picker once; rebuilt-in-place on refresh + permission states.
         let template = CPListTemplate(
-            title: String(localized: "Conduck"),  // xcstrings
+            title: String(localized: "Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale),  // xcstrings
             sections: []
         )
         self.listTemplate = template
@@ -206,6 +207,14 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         installVoiceTemplateButtons(service: service)
         observe(service: service)
         observeConversations()
+        languageObserver = NotificationCenter.default.addObserver(forName: .appLanguageDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let service = self.recordingService else { return }
+                self.installVoiceTemplateButtons(service: service)
+                self.applyState(service.state, service: service, animated: false)
+                self.refreshPicker()
+            }
+        }
 
         // Cold connect: paint the picker (or the permission state). Tapping a
         // row starts a session — there is no auto-listen on connect anymore
@@ -284,6 +293,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     /// `sceneDidDisconnect`, and (defensively) the top of the next `didConnect`.
     private func disconnectCleanup() {
         observationGeneration &+= 1
+        if let languageObserver {
+            NotificationCenter.default.removeObserver(languageObserver)
+            self.languageObserver = nil
+        }
         if let conversationsObserver {
             NotificationCenter.default.removeObserver(conversationsObserver)
             self.conversationsObserver = nil
@@ -566,7 +579,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 if tokenMissing {
                     // xcstrings
                     CarPlaySpeechService.shared.speak(
-                        String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.")
+                        String(localized: "This chat's AI isn't available on your iPhone. Start a new chat to use another one.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     ) { }
                     return
                 }
@@ -611,13 +624,13 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                         let name = RemoteAgentRefMetadata.shortDisplayName(for: unavailable, customs: snap.badgeRoster)
                         // xcstrings
                         CarPlaySpeechService.shared.speak(
-                            String(localized: "Your default AI, \(name), isn't available. Choose another from the list.")
+                            String(localized: "Your default AI, \(name), isn't available. Choose another from the list.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                         ) { }
                     } else {
                         // Nothing to name — no default has been chosen at all.
                         // xcstrings
                         CarPlaySpeechService.shared.speak(
-                            String(localized: "Conduck doesn't know which AI to use. Choose one from the list.")
+                            String(localized: "Conduck doesn't know which AI to use. Choose one from the list.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                         ) { }
                     }
                     self.presentGatewayChooser(configured: candidates,
@@ -627,7 +640,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 case .setUpOnPhone:
                     // xcstrings
                     CarPlaySpeechService.shared.speak(
-                        String(localized: "Set up your personal AI on iPhone first.")
+                        String(localized: "Set up your personal AI on iPhone first.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     ) { }
                     return
                 }
@@ -924,7 +937,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     private func makeWorkNoteItem(service: CarPlayRecordingService) -> CPListItem {
         let item = CPListItem(
             // xcstrings
-            text: String(localized: "carplay.picker.addToWork.title", defaultValue: "Add to Work"),
+            text: String(localized: "carplay.picker.addToWork.title", defaultValue: "Add to Work", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             detailText: nil
         )
         item.setImage(UIImage(systemName: "tray.and.arrow.down.fill"))
@@ -1087,7 +1100,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             guard !configuredRefs.isEmpty else {
                 // xcstrings
                 let item = CPListItem(
-                    text: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first."),
+                    text: String(localized: "setup.requiredOnPhone", defaultValue: "Set up your AI on iPhone first.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     detailText: nil
                 )
                 item.setImage(UIImage(systemName: "iphone"))
@@ -1105,8 +1118,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 // actually draws — "New voice chat" is not offered here.
                 if self.oneShotStartFailureHint {
                     let hint = CPListItem(
-                        text: String(localized: "carplay.hint.captureStartFailed.title", defaultValue: "Mic couldn't start"),  // xcstrings
-                        detailText: String(localized: "carplay.hint.captureStartFailed.detail.work", defaultValue: "Tap Add to Work to try again.")  // xcstrings
+                        text: String(localized: "carplay.hint.captureStartFailed.title", defaultValue: "Mic couldn't start", bundle: AppLocalization.bundle, locale: AppLocalization.locale),  // xcstrings
+                        detailText: String(localized: "carplay.hint.captureStartFailed.detail.work", defaultValue: "Tap Add to Work to try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
                     )
                     hint.setImage(UIImage(systemName: "mic.slash.fill"))
                     hint.handler = { _, completion in completion() }
@@ -1144,7 +1157,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
 
             // Row 0 — "New voice chat".
             let newItem = CPListItem(
-                text: String(localized: "New voice chat"),  // xcstrings
+                text: String(localized: "New voice chat", bundle: AppLocalization.bundle, locale: AppLocalization.locale),  // xcstrings
                 detailText: nil
             )
             newItem.setImage(UIImage(systemName: "mic.fill"))
@@ -1167,10 +1180,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
             // private thought to an AI.
             if oneShotStartFailureHint {
                 let detail = self.lastStartDestination == .work
-                    ? String(localized: "carplay.hint.captureStartFailed.detail.work", defaultValue: "Tap Add to Work to try again.")  // xcstrings
-                    : String(localized: "carplay.hint.captureStartFailed.detail", defaultValue: "Tap New voice chat to try again.")  // xcstrings
+                    ? String(localized: "carplay.hint.captureStartFailed.detail.work", defaultValue: "Tap Add to Work to try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
+                    : String(localized: "carplay.hint.captureStartFailed.detail", defaultValue: "Tap New voice chat to try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
                 let hint = CPListItem(
-                    text: String(localized: "carplay.hint.captureStartFailed.title", defaultValue: "Mic couldn't start"),  // xcstrings
+                    text: String(localized: "carplay.hint.captureStartFailed.title", defaultValue: "Mic couldn't start", bundle: AppLocalization.bundle, locale: AppLocalization.locale),  // xcstrings
                     detailText: detail
                 )
                 hint.setImage(UIImage(systemName: "mic.slash.fill"))
@@ -1230,7 +1243,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
                 sections.append(
                     CPListSection(
                         items: recentItems,
-                        header: String(localized: "Recent"),  // xcstrings
+                        header: String(localized: "Recent", bundle: AppLocalization.bundle, locale: AppLocalization.locale),  // xcstrings
                         sectionIndexTitle: nil
                     )
                 )
@@ -1412,7 +1425,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         // read as the one thing they are.
         let workItem = CPListItem(
             // xcstrings
-            text: String(localized: "carplay.picker.addToWork.title", defaultValue: "Add to Work"),
+            text: String(localized: "carplay.picker.addToWork.title", defaultValue: "Add to Work", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             detailText: nil
         )
         workItem.setImage(UIImage(systemName: "tray.and.arrow.down.fill"))
@@ -1453,7 +1466,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         }
         items.append(workItem)
         let chooser = CPListTemplate(
-            title: String(localized: "chat.chooseAI.label", defaultValue: "Choose AI"),
+            title: String(localized: "chat.chooseAI.label", defaultValue: "Choose AI", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             sections: [CPListSection(items: items)]
         )
         interfaceController?.pushTemplate(chooser, animated: true, completion: nil)
@@ -1498,7 +1511,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     ///   re-assigns ITSELF to reflect the new state. Re-assignment on a discrete
     ///   user tap (not a per-state swap) is the supported update path.
     private func installVoiceTemplateButtons(service: CarPlayRecordingService) {
-        let endButton = CPBarButton(title: String(localized: "End")) { [weak self, weak service] _ in  // xcstrings
+        let endButton = CPBarButton(title: String(localized: "End", bundle: AppLocalization.bundle, locale: AppLocalization.locale)) { [weak self, weak service] _ in  // xcstrings
             guard let service else { return }
             // A start still inside its present completion has no session yet, so
             // `endFromButton` alone returns on its `sessionActive` guard and the
@@ -1521,8 +1534,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
     private func setMuteButton(service: CarPlayRecordingService) {
         let muted = service.isMicMuted
         let title = muted
-            ? String(localized: "Unmute")  // xcstrings
-            : String(localized: "Mute")    // xcstrings
+            ? String(localized: "Unmute", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
+            : String(localized: "Mute", bundle: AppLocalization.bundle, locale: AppLocalization.locale)    // xcstrings
         let image = UIImage(systemName: muted ? "mic.slash.fill" : "mic.fill")
         let muteButton = CPBarButton(image: image ?? UIImage()) { [weak self, weak service] _ in
             guard let self, let service else { return }
@@ -1559,10 +1572,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         switch reason {
         case .undetermined:
             // xcstrings
-            phrase = String(localized: "Open Conduck on your iPhone to enable microphone access.")
+            phrase = String(localized: "Open Conduck on your iPhone to enable microphone access.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .denied:
             // xcstrings
-            phrase = String(localized: "Microphone access is off for Conduck. Turn it on in iPhone Settings.")
+            phrase = String(localized: "Microphone access is off for Conduck. Turn it on in iPhone Settings.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         CarPlaySpeechService.shared.speak(phrase) { }
     }
@@ -1574,14 +1587,14 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPI
         case .undetermined:
             // xcstrings
             return (
-                String(localized: "Mic access needed"),
-                String(localized: "Open Conduck on your iPhone to enable microphone access.")
+                String(localized: "Mic access needed", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
+                String(localized: "Open Conduck on your iPhone to enable microphone access.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
         case .denied:
             // xcstrings
             return (
-                String(localized: "Mic access is off"),
-                String(localized: "Turn it on in iPhone Settings.")
+                String(localized: "Mic access is off", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
+                String(localized: "Turn it on in iPhone Settings.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
         }
     }

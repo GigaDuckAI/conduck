@@ -690,7 +690,7 @@ final class DiagnosticsRunner {
             case .custom: title = Self.customGatewayTitle
             }
         } else {
-            title = String(localized: "diagnostics.focused.generic", defaultValue: "Last request")
+            title = String(localized: "diagnostics.focused.generic", defaultValue: "Last request", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return (title, explained.cause, explained.fix)
     }
@@ -986,11 +986,11 @@ final class DiagnosticsRunner {
         if UIImagePickerController.isSourceTypeAvailable(.camera), cameraStatus == .denied {
             cameraRow = DiagnosticCheck(
                 id: "capability.camera",
-                title: String(localized: "diagnostics.capability.camera", defaultValue: "Camera"),
+                title: String(localized: "diagnostics.capability.camera", defaultValue: "Camera", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .capability,
                 tier: .autoRead,
                 status: .warning,
-                detail: String(localized: "diagnostics.capability.camera.denied", defaultValue: "Turn on Camera access for Conduck in Settings to attach photos you take."),
+                detail: String(localized: "diagnostics.capability.camera.denied", defaultValue: "Turn on Camera access for Conduck in Settings to attach photos you take.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 role: nil, reportLabel: nil
             )
         }
@@ -1014,13 +1014,13 @@ final class DiagnosticsRunner {
             factScreenRecording = granted ? "authorized" : "denied"
             screenRecordingRow = DiagnosticCheck(
                 id: "capability.screenRecording",
-                title: String(localized: "diagnostics.capability.screenRecording", defaultValue: "Screen Recording"),
+                title: String(localized: "diagnostics.capability.screenRecording", defaultValue: "Screen Recording", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .capability,
                 tier: .autoRead,
                 status: granted ? .passed : .warning,
                 detail: granted
-                    ? String(localized: "diagnostics.capability.screenRecording.ok", defaultValue: "Screenshot & Ask can capture your screen.")
-                    : String(localized: "diagnostics.capability.screenRecording.denied", defaultValue: "Turn on Screen Recording for Conduck in System Settings to use ⌘⇧2 Screenshot & Ask. If it is already on, turn it off and on again, then quit and reopen Conduck."),
+                    ? String(localized: "diagnostics.capability.screenRecording.ok", defaultValue: "Screenshot & Ask can capture your screen.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                    : String(localized: "diagnostics.capability.screenRecording.denied", defaultValue: "Turn on Screen Recording for Conduck in System Settings to use ⌘⇧2 Screenshot & Ask. If it is already on, turn it off and on again, then quit and reopen Conduck.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 role: nil, reportLabel: nil
             )
         } else {
@@ -1040,14 +1040,14 @@ final class DiagnosticsRunner {
         if stuckShareCount > 0 || shareTargetsHealthy == false {
             var shareDetails: [String] = []
             if stuckShareCount > 0 {
-                shareDetails.append(String(localized: "diagnostics.capability.shareInbox.stuck", defaultValue: "\(stuckShareCount) shared item(s) have been waiting to import for a while — opening a conversation usually clears them."))
+                shareDetails.append(String(localized: "diagnostics.capability.shareInbox.stuck", defaultValue: "\(stuckShareCount) shared item(s) have been waiting to import for a while — opening a conversation usually clears them.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             }
             if shareTargetsHealthy == false {
-                shareDetails.append(String(localized: "diagnostics.capability.shareInbox.targetsBroken", defaultValue: "The share sheet's target list couldn't be read — sharing to Conduck may show an empty picker. It regenerates when you open the app or change a setting."))
+                shareDetails.append(String(localized: "diagnostics.capability.shareInbox.targetsBroken", defaultValue: "The share sheet's target list couldn't be read — sharing to Conduck may show an empty picker. It regenerates when you open the app or change a setting.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
             }
             shareInboxRow = DiagnosticCheck(
                 id: "capability.shareInbox",
-                title: String(localized: "diagnostics.capability.shareInbox", defaultValue: "Share to Conduck"),
+                title: String(localized: "diagnostics.capability.shareInbox", defaultValue: "Share to Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .capability,
                 tier: .autoRead,
                 status: .warning,
@@ -1066,7 +1066,7 @@ final class DiagnosticsRunner {
         if let storageState = Self.storageRowState(freeBytes: storageFreeBytes) {
             storageRow = DiagnosticCheck(
                 id: "capability.storage",
-                title: String(localized: "diagnostics.capability.storage", defaultValue: "Storage"),
+                title: String(localized: "diagnostics.capability.storage", defaultValue: "Storage", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .capability,
                 tier: .autoRead,
                 status: storageState.status,
@@ -1094,7 +1094,7 @@ final class DiagnosticsRunner {
                 factWatch = "paired,disabled"
                 factWatchBroadcast = "n/a"
                 watchStatus = .notApplicable
-                watchDetail = String(localized: "diagnostics.sync.watch.disabled", defaultValue: "Watch sync is turned off in Settings ▸ Apple Watch.")
+                watchDetail = String(localized: "diagnostics.sync.watch.disabled", defaultValue: "Watch sync is turned off in Settings ▸ Apple Watch.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             } else {
                 let installed = WCSession.default.isWatchAppInstalled
                 let reachable = WCSession.default.isReachable
@@ -1110,7 +1110,7 @@ final class DiagnosticsRunner {
                 let outstandingCouriers = Self.outstandingSettingsCourierCount()
                 watchStatus = watchState.status
                 watchDetail = installed && Self.courierFailureIsCurrent(successAt: courierSuccessAt, failureAt: courierFailureAt)
-                    ? watchState.detail + " " + String(localized: "diagnostics.sync.watch.courierFailing", defaultValue: "Recent settings updates to the watch haven't gone through.")
+                    ? watchState.detail + " " + String(localized: "diagnostics.sync.watch.courierFailing", defaultValue: "Recent settings updates to the watch haven't gone through.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     : watchState.detail
                 factWatch = "paired,installed=\(installed),reachable=\(reachable),turn=\(Self.watchTurnRecency(lastTurn))"
                 factWatchBroadcast = "lastSuccess=\(Self.stampRecency(courierSuccessAt)) lastFailure=\(Self.stampRecency(courierFailureAt)) outstanding=\(outstandingCouriers)"
@@ -1119,7 +1119,7 @@ final class DiagnosticsRunner {
             // tier can never fork between the disabled and live row forms.
             watchRow = DiagnosticCheck(
                 id: Self.watchCheckID,
-                title: String(localized: "diagnostics.sync.watch", defaultValue: "Apple Watch"),
+                title: String(localized: "diagnostics.sync.watch", defaultValue: "Apple Watch", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .sync,
                 tier: .autoRead,
                 status: watchStatus,
@@ -1329,7 +1329,7 @@ final class DiagnosticsRunner {
                 // App Group and then iCloud KVS, `getRemoteAgentModel` dual-reads
                 // the same way, and the token query carries `kSecAttrSynchronizable`.
                 // "On this device" told the user their other devices were fine.
-                detail: String(localized: "diagnostics.connection.gateway.focused.missing.detail.v3", defaultValue: "This conversation's gateway isn't available on this device, so the thread can't send. Open it in Personal AI, or Clone the conversation to a gateway that works."),
+                detail: String(localized: "diagnostics.connection.gateway.focused.missing.detail.v3", defaultValue: "This conversation's gateway isn't available on this device, so the thread can't send. Open it in Personal AI, or Clone the conversation to a gateway that works.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 role: .focused, reportLabel: nil
             ))
         }
@@ -1356,11 +1356,11 @@ final class DiagnosticsRunner {
             // would be false in the one case the user most needs to trust.
             built.append(DiagnosticCheck(
                 id: "connection.gateway.none",
-                title: String(localized: "diagnostics.connection.gateway.none.v3", defaultValue: "No gateway can send right now"),
+                title: String(localized: "diagnostics.connection.gateway.none.v3", defaultValue: "No gateway can send right now", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .connection,
                 tier: .autoRead,
                 status: .failed(code: AppError.remoteAgentNotConfigured.errorCode),
-                detail: String(localized: "diagnostics.connection.gateway.none.detail.v3", defaultValue: "Nothing on this device can reach an AI. Connect one in Settings → Personal AI — or, if you set one up on another device, give iCloud a moment to finish syncing."),
+                detail: String(localized: "diagnostics.connection.gateway.none.detail.v3", defaultValue: "Nothing on this device can reach an AI. Connect one in Settings → Personal AI — or, if you set one up on another device, give iCloud a moment to finish syncing.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 role: nil, reportLabel: nil
             ))
         }
@@ -1380,7 +1380,7 @@ final class DiagnosticsRunner {
 
         built.append(DiagnosticCheck(
             id: "connection.network",
-            title: String(localized: "diagnostics.connection.network", defaultValue: "Network connection"),
+            title: String(localized: "diagnostics.connection.network", defaultValue: "Network connection", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             category: .connection,
             tier: .autoRead,
             status: .running,
@@ -1396,7 +1396,7 @@ final class DiagnosticsRunner {
         // URLSession delivery path.
         built.append(DiagnosticCheck(
             id: "connection.notifications",
-            title: String(localized: "diagnostics.connection.notifications", defaultValue: "Notifications"),
+            title: String(localized: "diagnostics.connection.notifications", defaultValue: "Notifications", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             category: .capability,
             tier: .autoRead,
             status: notifCheckStatus,
@@ -1421,8 +1421,8 @@ final class DiagnosticsRunner {
                 // checks the endpoint answers at the auth layer, so the row is
                 // titled for what it actually tests.
                 title: sttKeylessConfigured
-                    ? String(localized: "diagnostics.voice.stt.auth.keyless", defaultValue: "Transcription endpoint")
-                    : String(localized: "diagnostics.voice.stt.auth", defaultValue: "Transcription key"),
+                    ? String(localized: "diagnostics.voice.stt.auth.keyless", defaultValue: "Transcription endpoint", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                    : String(localized: "diagnostics.voice.stt.auth", defaultValue: "Transcription key", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .voice,
                 tier: .networkCheck,
                 status: .notRun,
@@ -1431,14 +1431,14 @@ final class DiagnosticsRunner {
         }
         built.append(DiagnosticCheck(
             id: "voice.stt.test",
-            title: String(localized: "diagnostics.voice.stt.test", defaultValue: "Transcription test"),
+            title: String(localized: "diagnostics.voice.stt.test", defaultValue: "Transcription test", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             category: .voice,
             tier: .explicitPaid,
             status: .notRun, detail: nil, role: nil, reportLabel: customSTTLabel
         ))
         built.append(DiagnosticCheck(
             id: "voice.tts.preview",
-            title: String(localized: "diagnostics.voice.tts.preview", defaultValue: "Voice preview"),
+            title: String(localized: "diagnostics.voice.tts.preview", defaultValue: "Voice preview", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             category: .voice,
             tier: .explicitPaid,
             status: .notRun, detail: nil, role: nil, reportLabel: nil
@@ -1451,7 +1451,7 @@ final class DiagnosticsRunner {
         // the section via `shouldShowVoiceSection`.
         built.append(DiagnosticCheck(
             id: "voice.mic.permission",
-            title: String(localized: "diagnostics.voice.mic", defaultValue: "Microphone"),
+            title: String(localized: "diagnostics.voice.mic", defaultValue: "Microphone", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             category: .voice,
             tier: .autoRead,
             status: micCheckStatus,
@@ -1461,7 +1461,7 @@ final class DiagnosticsRunner {
         if speechApplicable {
             built.append(DiagnosticCheck(
                 id: "voice.speech.permission",
-                title: String(localized: "diagnostics.voice.speech", defaultValue: "Speech recognition"),
+                title: String(localized: "diagnostics.voice.speech", defaultValue: "Speech recognition", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .voice,
                 tier: .autoRead,
                 status: speechCheckStatus,
@@ -1493,10 +1493,10 @@ final class DiagnosticsRunner {
         let iCloudDetail: String?
         if ubiquityPresent {
             iCloudStatus = .passed
-            iCloudDetail = String(localized: "diagnostics.sync.ok", defaultValue: "Signed in to iCloud.")
+            iCloudDetail = String(localized: "diagnostics.sync.ok", defaultValue: "Signed in to iCloud.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         } else if carryOver {
             iCloudStatus = .warning
-            iCloudDetail = String(localized: "diagnostics.sync.unknown", defaultValue: "iCloud account status unavailable.")
+            iCloudDetail = String(localized: "diagnostics.sync.unknown", defaultValue: "iCloud account status unavailable.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         } else {
             iCloudStatus = .running
             iCloudDetail = nil
@@ -1507,7 +1507,7 @@ final class DiagnosticsRunner {
         )
         built.append(DiagnosticCheck(
             id: "sync.content",
-            title: String(localized: "diagnostics.sync.content", defaultValue: "Content sync on this device"),
+            title: String(localized: "diagnostics.sync.content", defaultValue: "Content sync on this device", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             category: .sync, tier: .autoRead,
             status: contentSync.status, detail: contentSync.detail,
             role: nil, reportLabel: nil
@@ -1515,7 +1515,7 @@ final class DiagnosticsRunner {
         if ContentSyncPreferenceStore.shared.isEnabled {
             built.append(DiagnosticCheck(
                 id: "sync.icloud",
-                title: String(localized: "diagnostics.sync.icloud", defaultValue: "iCloud sync"),
+                title: String(localized: "diagnostics.sync.icloud", defaultValue: "iCloud sync", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 category: .sync,
                 tier: .autoRead,
                 status: iCloudStatus,
@@ -1529,7 +1529,7 @@ final class DiagnosticsRunner {
         let syncEventsState = Self.syncEventsRowState(syncLines)
         built.append(DiagnosticCheck(
             id: "sync.events",
-            title: String(localized: "diagnostics.sync.events", defaultValue: "Recent sync activity"),
+            title: String(localized: "diagnostics.sync.events", defaultValue: "Recent sync activity", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             category: .sync,
             tier: .autoRead,
             status: syncEventsState.status,
@@ -1669,13 +1669,13 @@ final class DiagnosticsRunner {
         factNetworkConstrained = net.constrained
         showsNetworkConnectionIssue = !net.reachable || net.constrained
         var networkDetail = net.reachable
-            ? String(localized: "diagnostics.connection.network.ok", defaultValue: "Reachable over \(net.interface).")
-            : String(localized: "diagnostics.connection.network.down", defaultValue: "No network connection detected.")
+            ? String(localized: "diagnostics.connection.network.ok", defaultValue: "Reachable over \(net.interface).", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+            : String(localized: "diagnostics.connection.network.down", defaultValue: "No network connection detected.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // Low Data Mode note — detail only, status stays `.passed` (a deliberate
         // user setting must not read as a fault; it merely limits background
         // transfers/large attachments). `isExpensive` stays copy-block-only.
         if net.reachable, net.constrained {
-            networkDetail += " " + String(localized: "diagnostics.connection.network.constrained", defaultValue: "Low Data Mode is on — background transfers and large attachments may be limited.")
+            networkDetail += " " + String(localized: "diagnostics.connection.network.constrained", defaultValue: "Low Data Mode is on — background transfers and large attachments may be limited.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         setStatus(
             "connection.network",
@@ -1694,10 +1694,10 @@ final class DiagnosticsRunner {
             syncDetail = String(localized: reason.settingsMessage)
         } else if factUbiquityPresent {
             syncStatus = .passed
-            syncDetail = String(localized: "diagnostics.sync.ok", defaultValue: "Signed in to iCloud.")
+            syncDetail = String(localized: "diagnostics.sync.ok", defaultValue: "Signed in to iCloud.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         } else {
             syncStatus = .warning
-            syncDetail = String(localized: "diagnostics.sync.unknown", defaultValue: "iCloud account status unavailable.")
+            syncDetail = String(localized: "diagnostics.sync.unknown", defaultValue: "iCloud account status unavailable.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         setStatus("sync.icloud", syncStatus, detail: syncDetail)
         factICloudStatus = {
@@ -1718,13 +1718,13 @@ final class DiagnosticsRunner {
     ) -> (status: DiagnosticStatus, detail: String) {
         switch state {
         case .on:
-            return (.passed, String(localized: "diagnostics.sync.content.on", defaultValue: "Content sync is on for this device."))
+            return (.passed, String(localized: "diagnostics.sync.content.on", defaultValue: "Content sync is on for this device.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .off:
-            return (.passed, String(localized: "diagnostics.sync.content.off", defaultValue: "Content sync is off on this device. Settings and keys can still sync."))
+            return (.passed, String(localized: "diagnostics.sync.content.off", defaultValue: "Content sync is off on this device. Settings and keys can still sync.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .applying:
-            return (.running, String(localized: message ?? LocalizedStringResource("settings.contentSync.applying", defaultValue: "Updating content sync on this device…")))
+            return (.running, String(localized: message ?? LocalizedStringResource("settings.contentSync.applying", defaultValue: "Updating content sync on this device…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .failed:
-            return (.warning, String(localized: message ?? LocalizedStringResource("diagnostics.sync.content.failed", defaultValue: "Content sync couldn’t be updated. Open Settings → General to try again.")))
+            return (.warning, String(localized: message ?? LocalizedStringResource("diagnostics.sync.content.failed", defaultValue: "Content sync couldn’t be updated. Open Settings → General to try again.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
     }
 
@@ -2364,7 +2364,7 @@ final class DiagnosticsRunner {
             setStatus(
                 "voice.stt.test",
                 .passed,
-                detail: String(localized: "diagnostics.voice.stt.heard", defaultValue: "Heard: \(heard)")
+                detail: String(localized: "diagnostics.voice.stt.heard", defaultValue: "Heard: \(heard)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             )
         } catch {
             guard activeSTTSignature == sigAtStart else { return }
@@ -2414,11 +2414,11 @@ final class DiagnosticsRunner {
                 ? String(
                     localized: "diagnostics.voice.preview.missingKey",
                     defaultValue: "Add your voice provider's key in Settings to preview this voice."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 : String(
                     localized: "diagnostics.voice.preview.keyUnreadable",
                     defaultValue: "The voice key couldn't be read from the Keychain — unlock the device and try again."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             TTSOutcomeLog.shared.record(
                 surface: .diagnostics,
                 stage: .key,
@@ -3138,13 +3138,13 @@ final class DiagnosticsRunner {
             detail = String(
                 localized: "diagnostics.connection.defaultGateway.ok",
                 defaultValue: "New chats and the GigaAction Shortcut start on your default gateway."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .autoAdopted:
             status = .passed
             detail = String(
                 localized: "diagnostics.connection.defaultGateway.adopted",
                 defaultValue: "Conduck switched your default because the old one isn't available here."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .broken:
             status = .failed(code: AppError.remoteAgentNotConfigured.errorCode)
             // Carries the picker callout's own sentence
@@ -3156,13 +3156,13 @@ final class DiagnosticsRunner {
             detail = String(
                 localized: "diagnostics.connection.defaultGateway.unavailable",
                 defaultValue: "Your default gateway isn't available on this device, so new chats and the GigaAction Shortcut won't go anywhere. It'll work again on its own if it's just waiting on iCloud, or you can switch to a gateway that works here."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .notChosen:
             status = .failed(code: AppError.remoteAgentNotConfigured.errorCode)
             detail = String(
                 localized: "diagnostics.connection.defaultGateway.notChosen",
                 defaultValue: "Conduck doesn't know which AI new chats should use, so new chats and the GigaAction Shortcut won't go anywhere. Choose one in Personal AI."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return DiagnosticCheck(
             id: Self.defaultGatewayCheckID,
@@ -3172,7 +3172,7 @@ final class DiagnosticsRunner {
             title: String(
                 localized: "diagnostics.connection.defaultGateway",
                 defaultValue: "Default for new chats"
-            ),
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             category: .connection,
             tier: .autoRead,
             status: status,
@@ -3340,7 +3340,7 @@ final class DiagnosticsRunner {
             // for. `ordinal` is the canonical config-order `N` (see `customOrdinals`),
             // so it matches the copy block's `custom-gateway#N`.
             if let ordinal {
-                return String(localized: "diagnostics.gateway.customNumbered", defaultValue: "Custom gateway \(ordinal)")
+                return String(localized: "diagnostics.gateway.customNumbered", defaultValue: "Custom gateway \(ordinal)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             return customGatewayTitle
         }
@@ -3430,14 +3430,14 @@ final class DiagnosticsRunner {
     private static func fileReachStatus(_ outcome: FileReachabilityOutcome) -> (DiagnosticStatus, String?) {
         switch outcome {
         case .reachAuthOK:
-            return (.warning, String(localized: "diagnostics.files.reach.ok.v2", defaultValue: "File host reachable and sign-in looks OK, but this check can't prove uploads land. Run the file-server test to confirm."))
+            return (.warning, String(localized: "diagnostics.files.reach.ok.v2", defaultValue: "File host reachable and sign-in looks OK, but this check can't prove uploads land. Run the file-server test to confirm.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .authFailed:
             let code = AppError.fileTransferAuthFailed.errorCode
             return (.failed(code: code), DiagnosticsExplainer.explain(code: code).fix)
         case .suspicious:
-            return (.warning, String(localized: "diagnostics.files.reach.suspicious", defaultValue: "Reached the file host, but the response was unexpected. Run the file-server test to confirm."))
+            return (.warning, String(localized: "diagnostics.files.reach.suspicious", defaultValue: "Reached the file host, but the response was unexpected. Run the file-server test to confirm.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .inconclusive:
-            return (.warning, String(localized: "diagnostics.files.reach.inconclusive", defaultValue: "Couldn't confirm the file host. Run the file-server test."))
+            return (.warning, String(localized: "diagnostics.files.reach.inconclusive", defaultValue: "Couldn't confirm the file host. Run the file-server test.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         case .unreachable:
             let code = AppError.fileTransferUnreachable.errorCode
             return (.failed(code: code), DiagnosticsExplainer.explain(code: code).fix)
@@ -3523,7 +3523,7 @@ final class DiagnosticsRunner {
                     detail: String(
                         localized: "diagnostics.gateway.reach.ok",
                         defaultValue: "Reachable and signed in."
-                    )
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
             case .okNoModels:
                 // The route is real and speaks the protocol — but a gateway
@@ -3536,7 +3536,7 @@ final class DiagnosticsRunner {
                     detail: String(
                         localized: "diagnostics.gateway.noModels",
                         defaultValue: "Your gateway answered, but lists no models. Load a model on the server."
-                    )
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 )
             case .untrustedCert:
                 // FAILED, not `.warning`: a warning reads as "works, but tidy
@@ -3639,7 +3639,7 @@ final class DiagnosticsRunner {
     // phrase assembled here would exist only at runtime, so it would appear in
     // no string catalog and no copy sweep could find it — and Diagnostics is the
     // screen users paste into support tickets and issues.
-    private static let customGatewayTitle = String(localized: "diagnostics.gateway.custom", defaultValue: "Custom gateway")
+    private static var customGatewayTitle: String { String(localized: "diagnostics.gateway.custom", defaultValue: "Custom gateway", bundle: AppLocalization.bundle, locale: AppLocalization.locale) }
 
     /// The setup-row status for a voice provider. When the TYPED `keyState` is
     /// supplied (the TTS path, from `TTSSnapshot`) it is the authoritative source —
@@ -3746,17 +3746,17 @@ final class DiagnosticsRunner {
     /// user stopped wearing is not a fault. Static + non-private for tests.
     static func watchRowState(installed: Bool, reachable: Bool, lastTurn: Date?) -> (status: DiagnosticStatus, detail: String) {
         if !installed {
-            return (.notApplicable, String(localized: "diagnostics.sync.watch.notInstalled", defaultValue: "Conduck isn't installed on your Apple Watch — install it from the Watch app to use it on the wrist."))
+            return (.notApplicable, String(localized: "diagnostics.sync.watch.notInstalled", defaultValue: "Conduck isn't installed on your Apple Watch — install it from the Watch app to use it on the wrist.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         let base = reachable
-            ? String(localized: "diagnostics.sync.watch.reachable", defaultValue: "Apple Watch is connected.")
-            : String(localized: "diagnostics.sync.watch.asleep", defaultValue: "Apple Watch is paired — it'll sync when it's awake and nearby.")
+            ? String(localized: "diagnostics.sync.watch.reachable", defaultValue: "Apple Watch is connected.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+            : String(localized: "diagnostics.sync.watch.asleep", defaultValue: "Apple Watch is paired — it'll sync when it's awake and nearby.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         let recency: String
         if let lastTurn {
-            let relative = lastTurn.formatted(.relative(presentation: .named))
-            recency = String(localized: "diagnostics.sync.watch.lastTurn", defaultValue: "Last Watch reply landed \(relative).")
+            let relative = lastTurn.formatted(.relative(presentation: .named).locale(AppLocalization.locale))
+            recency = String(localized: "diagnostics.sync.watch.lastTurn", defaultValue: "Last Watch reply landed \(relative).", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         } else {
-            recency = String(localized: "diagnostics.sync.watch.neverTurn", defaultValue: "This iPhone hasn't observed a successful Watch reply yet — record once from the wrist to confirm end-to-end.")
+            recency = String(localized: "diagnostics.sync.watch.neverTurn", defaultValue: "This iPhone hasn't observed a successful Watch reply yet — record once from the wrist to confirm end-to-end.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return (.passed, "\(base) \(recency)")
     }
@@ -3852,15 +3852,15 @@ final class DiagnosticsRunner {
         case .allowed:
             return nil
         case .notRequested:
-            return String(localized: "diagnostics.permission.notRequested", defaultValue: "Not requested yet.")
+            return String(localized: "diagnostics.permission.notRequested", defaultValue: "Not requested yet.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .denied:
-            return String(localized: "diagnostics.voice.mic.denied", defaultValue: "Microphone access is off for Conduck.")
+            return String(localized: "diagnostics.voice.mic.denied", defaultValue: "Microphone access is off for Conduck.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .restricted:
             // AVAudioApplication currently exposes no restricted case; keep the
             // shared-state branch honest if Apple adds one later.
-            return String(localized: "diagnostics.voice.mic.restricted", defaultValue: "Microphone access is controlled by Screen Time or device management.")
+            return String(localized: "diagnostics.voice.mic.restricted", defaultValue: "Microphone access is controlled by Screen Time or device management.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unknown:
-            return String(localized: "diagnostics.permission.statusUnavailable", defaultValue: "Permission status unavailable.")
+            return String(localized: "diagnostics.permission.statusUnavailable", defaultValue: "Permission status unavailable.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -3890,13 +3890,13 @@ final class DiagnosticsRunner {
         case .allowed:
             return nil
         case .notRequested:
-            return String(localized: "diagnostics.permission.notRequested", defaultValue: "Not requested yet.")
+            return String(localized: "diagnostics.permission.notRequested", defaultValue: "Not requested yet.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .denied:
-            return String(localized: "stt.error.speechPermissionDenied", defaultValue: "Speech Recognition is turned off for Conduck.")
+            return String(localized: "stt.error.speechPermissionDenied", defaultValue: "Speech Recognition is turned off for Conduck.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .restricted:
-            return String(localized: "diagnostics.voice.speech.restricted", defaultValue: "Speech Recognition is controlled by Screen Time or device management.")
+            return String(localized: "diagnostics.voice.speech.restricted", defaultValue: "Speech Recognition is controlled by Screen Time or device management.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unknown:
-            return String(localized: "diagnostics.permission.statusUnavailable", defaultValue: "Permission status unavailable.")
+            return String(localized: "diagnostics.permission.statusUnavailable", defaultValue: "Permission status unavailable.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
     #endif
@@ -3970,16 +3970,16 @@ final class DiagnosticsRunner {
     private static func notificationDetail(_ s: UNNotificationSettings) -> String {
         switch s.authorizationStatus {
         case .denied:
-            return String(localized: "diagnostics.notifications.disabled.info", defaultValue: "Notifications are off. Shortcut and background replies arrive silently; enable notifications if you want alerts.")
+            return String(localized: "diagnostics.notifications.disabled.info", defaultValue: "Notifications are off. Shortcut and background replies arrive silently; enable notifications if you want alerts.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .notDetermined:
-            return String(localized: "diagnostics.permission.notRequested", defaultValue: "Not requested yet.")
+            return String(localized: "diagnostics.permission.notRequested", defaultValue: "Not requested yet.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .authorized, .provisional, .ephemeral:
             if notificationAlertsSuppressed(s) {
-                return String(localized: "diagnostics.notifications.alertsOff.info", defaultValue: "Alerts are off. Shortcut and background replies arrive silently; enable alerts if you want them.")
+                return String(localized: "diagnostics.notifications.alertsOff.info", defaultValue: "Alerts are off. Shortcut and background replies arrive silently; enable alerts if you want them.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "diagnostics.notifications.ok", defaultValue: "Shortcut and background replies can notify you.")
+            return String(localized: "diagnostics.notifications.ok", defaultValue: "Shortcut and background replies can notify you.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         @unknown default:
-            return String(localized: "diagnostics.permission.statusUnavailable", defaultValue: "Permission status unavailable.")
+            return String(localized: "diagnostics.permission.statusUnavailable", defaultValue: "Permission status unavailable.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -4006,9 +4006,9 @@ final class DiagnosticsRunner {
         let mb = freeBytes / (1024 * 1024)
         if mb >= 500 { return nil }
         if mb < 100 {
-            return (.warning, String(localized: "diagnostics.capability.storage.critical", defaultValue: "Storage is critically low (\(mb) MB free) — attachments, shared items, and sync can fail. Free up space."))
+            return (.warning, String(localized: "diagnostics.capability.storage.critical", defaultValue: "Storage is critically low (\(mb) MB free) — attachments, shared items, and sync can fail. Free up space.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
-        return (.warning, String(localized: "diagnostics.capability.storage.low", defaultValue: "Storage is low (\(mb) MB free) — attachments, shared items, and sync may fail."))
+        return (.warning, String(localized: "diagnostics.capability.storage.low", defaultValue: "Storage is low (\(mb) MB free) — attachments, shared items, and sync may fail.", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
     }
 
     /// Copy-block bucket for the storage probe: ok / low / critical / unknown.
@@ -4043,11 +4043,11 @@ final class DiagnosticsRunner {
         let lastFailed = syncLines.last?.contains("FAIL") == true
         let detail: String
         if lastFailed {
-            detail = String(localized: "diagnostics.sync.events.history.latestFailed", defaultValue: "\(syncLines.count) recorded sync events; the last recorded attempt failed. This history does not establish current sync health.")
+            detail = String(localized: "diagnostics.sync.events.history.latestFailed", defaultValue: "\(syncLines.count) recorded sync events; the last recorded attempt failed. This history does not establish current sync health.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         } else if errorCount > 0 {
-            detail = String(localized: "diagnostics.sync.events.history.mixed", defaultValue: "\(syncLines.count) recorded sync events, including \(errorCount) failures. The last recorded attempt succeeded; earlier failures may concern a different sync operation.")
+            detail = String(localized: "diagnostics.sync.events.history.mixed", defaultValue: "\(syncLines.count) recorded sync events, including \(errorCount) failures. The last recorded attempt succeeded; earlier failures may concern a different sync operation.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         } else {
-            detail = String(localized: "diagnostics.sync.events.ok", defaultValue: "\(syncLines.count) recent sync events.")
+            detail = String(localized: "diagnostics.sync.events.ok", defaultValue: "\(syncLines.count) recent sync events.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return (.notApplicable, detail)
     }

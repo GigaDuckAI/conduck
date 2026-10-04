@@ -35,9 +35,9 @@ struct VoiceDirectionSelectorRow: View {
     private var label: LocalizedStringResource {
         switch direction {
         case .stt:
-            return LocalizedStringResource("settings.voice.selector.stt", defaultValue: "Speech-to-Text")
+            return LocalizedStringResource("settings.voice.selector.stt", defaultValue: "Speech-to-Text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .tts:
-            return LocalizedStringResource("settings.voice.selector.tts", defaultValue: "Text-to-Speech")
+            return LocalizedStringResource("settings.voice.selector.tts", defaultValue: "Text-to-Speech", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

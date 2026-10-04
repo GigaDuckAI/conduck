@@ -99,13 +99,13 @@ struct VoiceReliabilityDisclosure: View {
             Text(LocalizedStringResource(
                 "settings.voice.reliability.label",
                 defaultValue: "About reliability"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.subheadline)
             .foregroundStyle(AppColors.textPrimary)
             Text(LocalizedStringResource(
                 "settings.voice.reliability.labelHint",
                 defaultValue: "How spoken replies use your provider"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption2)
             .foregroundStyle(AppColors.textTertiary)
         }
@@ -117,7 +117,7 @@ struct VoiceReliabilityDisclosure: View {
         Text(LocalizedStringResource(
             "settings.voice.reliability.body",
             defaultValue: "Long spoken replies fetch audio from your provider in several small requests, so playback starts quickly instead of waiting for the whole reply. Some providers limit how often audio can be requested — most commonly on free usage tiers. If a long reply switches to the built-in voice partway through, that's usually why; a higher usage tier at your provider prevents it. Replies always finish: Conduck falls back to the built-in voice whenever needed."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         .font(.footnote)
         .foregroundStyle(AppColors.textSecondary)
         .fixedSize(horizontal: false, vertical: true)

@@ -248,11 +248,11 @@ struct GatewayPresenceDot: View {
     static func label(for presence: GatewayPresence) -> LocalizedStringResource {
         switch presence {
         case .checking:
-            return LocalizedStringResource("chat.presence.checking", defaultValue: "Checking connection")
+            return LocalizedStringResource("chat.presence.checking", defaultValue: "Checking connection", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .reachable:
-            return LocalizedStringResource("chat.presence.reachable", defaultValue: "Connected")
+            return LocalizedStringResource("chat.presence.reachable", defaultValue: "Connected", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .failed:
-            return LocalizedStringResource("chat.presence.failed", defaultValue: "Connection check failed")
+            return LocalizedStringResource("chat.presence.failed", defaultValue: "Connection check failed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 

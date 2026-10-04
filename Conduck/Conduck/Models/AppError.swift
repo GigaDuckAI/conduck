@@ -424,37 +424,37 @@ enum AppError: LocalizedError {
         switch self {
         // Network errors
         case .networkError(let error):
-            return String(localized: "network.error.generic", defaultValue: "Network error: \(error.localizedDescription)")
+            return String(localized: "network.error.generic", defaultValue: "Network error: \(error.localizedDescription)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .invalidURL:
-            return String(localized: "request.error.invalidURL", defaultValue: "Invalid API endpoint URL")
+            return String(localized: "request.error.invalidURL", defaultValue: "Invalid API endpoint URL", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .noInternetConnection:
-            return String(localized: "network.error.noConnection", defaultValue: "No internet. Conduck needs Wi-Fi or cellular to work.")
+            return String(localized: "network.error.noConnection", defaultValue: "No internet. Conduck needs Wi-Fi or cellular to work.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .requestTimeout:
-            return String(localized: "network.error.timeout", defaultValue: "Request timed out. Network might be spotty.")
+            return String(localized: "network.error.timeout", defaultValue: "Request timed out. Network might be spotty.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .persistentNetworkFailure:
-            return String(localized: "network.error.persistentFailure", defaultValue: "Couldn't reach the server. Recording saved — open Conduck to retry.")
+            return String(localized: "network.error.persistentFailure", defaultValue: "Couldn't reach the server. Recording saved — open Conduck to retry.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .invalidResponse:
-            return String(localized: "request.error.invalidResponse", defaultValue: "Got an unexpected response from the server.")
+            return String(localized: "request.error.invalidResponse", defaultValue: "Got an unexpected response from the server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .decodingError(let error):
-            return String(localized: "request.error.decodingError", defaultValue: "Couldn't read the server response: \(error.localizedDescription)")
+            return String(localized: "request.error.decodingError", defaultValue: "Couldn't read the server response: \(error.localizedDescription)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // STT auth / quota
         case .sttAuthFailed:
-            return String(localized: "stt.error.authFailed", defaultValue: "Your STT API key was rejected. Open Conduck → Settings to update it.")
+            return String(localized: "stt.error.authFailed", defaultValue: "Your STT API key was rejected. Open Conduck → Settings to update it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttQuotaExceeded:
-            return String(localized: "stt.error.quotaExceeded", defaultValue: "Your STT provider quota is exhausted. Check your billing dashboard.")
+            return String(localized: "stt.error.quotaExceeded", defaultValue: "Your STT provider quota is exhausted. Check your billing dashboard.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttTooManyRequests:
-            return String(localized: "stt.error.tooManyRequests", defaultValue: "STT provider is rate-limiting requests. Try again in a moment.")
+            return String(localized: "stt.error.tooManyRequests", defaultValue: "STT provider is rate-limiting requests. Try again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttServerError:
-            return String(localized: "stt.error.serverError", defaultValue: "STT provider is having issues on their end. Recording saved — open Conduck to retry.")
+            return String(localized: "stt.error.serverError", defaultValue: "STT provider is having issues on their end. Recording saved — open Conduck to retry.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .appleSpeechModelNotInstalled:
             // New key (`…v2`) so the reworded copy wins over the catalog entry
             // for the old "isn't downloaded yet" string (catalog-value-wins rule).
-            return String(localized: "stt.error.appleSpeechModelNotInstalled.v2", defaultValue: "On-device voice model isn't ready for this language yet.")
+            return String(localized: "stt.error.appleSpeechModelNotInstalled.v2", defaultValue: "On-device voice model isn't ready for this language yet.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .appleSpeechLanguageUnsupported:
-            return String(localized: "stt.error.appleSpeechLanguageUnsupported", defaultValue: "Apple Speech doesn't support this language on-device.")
+            return String(localized: "stt.error.appleSpeechLanguageUnsupported", defaultValue: "Apple Speech doesn't support this language on-device.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .speechPermissionDenied:
-            return String(localized: "stt.error.speechPermissionDenied", defaultValue: "Speech Recognition is turned off for Conduck.")
+            return String(localized: "stt.error.speechPermissionDenied", defaultValue: "Speech Recognition is turned off for Conduck.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Request / API errors
         case .invalidRequest(let message):
@@ -464,35 +464,35 @@ enum AppError: LocalizedError {
             // value (catalog-value-wins rule). No-backend app: never imply a
             // intermediary server — this case wraps network/decoding/unknown errors,
             // whose "server" is the user's own gateway or STT provider.
-            return String(localized: "api.error.failure.v2", defaultValue: "Something went wrong with the last request. Try again in a moment.")
+            return String(localized: "api.error.failure.v2", defaultValue: "Something went wrong with the last request. Try again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioInvalid:
-            return String(localized: "audio.error.invalid", defaultValue: "Couldn't read that audio. Record again.")
+            return String(localized: "audio.error.invalid", defaultValue: "Couldn't read that audio. Record again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioMissingData:
-            return String(localized: "audio.error.missingData", defaultValue: "No audio data to transcribe.")
+            return String(localized: "audio.error.missingData", defaultValue: "No audio data to transcribe.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioMicBusy:
-            return String(localized: "audio.error.micBusy", defaultValue: "The microphone is already in use by another recording.")
+            return String(localized: "audio.error.micBusy", defaultValue: "The microphone is already in use by another recording.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .settingsLoadFailed:
-            return String(localized: "settings.error.loadFailed", defaultValue: "Failed to load settings. Using defaults.")
+            return String(localized: "settings.error.loadFailed", defaultValue: "Failed to load settings. Using defaults.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // STT operational
         case .sttProviderUnreachable:
-            return String(localized: "stt.error.providerUnreachable", defaultValue: "STT provider is unreachable. Recording saved — open Conduck to retry.")
+            return String(localized: "stt.error.providerUnreachable", defaultValue: "STT provider is unreachable. Recording saved — open Conduck to retry.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .noSpeechDetected:
             // Neutral by design: 21 covers genuine silence AND unintelligible
             // audio (the provider returned 2xx with an empty transcript) — the
             // copy must not blame the user's voice or mic technique.
-            return String(localized: "audio.error.noSpeechDetected", defaultValue: "No speech was recognized in the recording.")
+            return String(localized: "audio.error.noSpeechDetected", defaultValue: "No speech was recognized in the recording.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioTooLarge:
-            return String(localized: "audio.error.tooLarge", defaultValue: "Recording too long. Keep it under 5 minutes.")
+            return String(localized: "audio.error.tooLarge", defaultValue: "Recording too long. Keep it under 5 minutes.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttMissingAPIKey:
-            return String(localized: "stt.error.missingKey", defaultValue: "No STT API key set. Open Conduck → Settings to add one.")
+            return String(localized: "stt.error.missingKey", defaultValue: "No STT API key set. Open Conduck → Settings to add one.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .turnStoppedBeforeSend:
             // Names the user's own action, because that is what happened, and
             // names no machine at the other end, because the byte counters
             // prove nothing about one. Lane-agnostic by construction: there is
             // no branch to make, on any lane.
             return String(localized: "remoteAgent.error.stoppedBeforeSend",
-                          defaultValue: "You stopped this message before it was sent.")
+                          defaultValue: "You stopped this message before it was sent.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .insecureConnectionBlocked:
             // Names Apple as the refuser, not Conduck: the app did not choose
             // this, and implying otherwise invites the user to hunt for a
@@ -502,7 +502,7 @@ enum AppError: LocalizedError {
             // characters): this string is a notification title and a Watch
             // banner, and the wrist holds roughly 38 characters over two lines.
             return String(localized: "remoteAgent.error.insecureBlocked.v2",
-                          defaultValue: "Apple blocked this unencrypted address.")
+                          defaultValue: "Apple blocked this unencrypted address.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttKeyUnreadable:
             // Says what is TRUE (the key could not be read) and never what is
             // merely likely (that there is no key). Carries its own instruction
@@ -524,13 +524,13 @@ enum AppError: LocalizedError {
             //
             // Catalog-value-wins rule: a reworded existing key ships the OLD
             // string, so this is a new key.
-            return String(localized: "stt.error.keyUnreadable.v2", defaultValue: "Couldn't read your STT API key. If this device just restarted, unlock it and try again.")
+            return String(localized: "stt.error.keyUnreadable.v2", defaultValue: "Couldn't read your STT API key. If this device just restarted, unlock it and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // New tail
         case .audioProcessingFailed:
-            return String(localized: "audio.error.processingFailed", defaultValue: "STT provider couldn't process that audio. Record again.")
+            return String(localized: "audio.error.processingFailed", defaultValue: "STT provider couldn't process that audio. Record again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttDecodingFailure:
-            return String(localized: "stt.error.decodingFailure", defaultValue: "STT provider returned an unexpected response format.")
+            return String(localized: "stt.error.decodingFailure", defaultValue: "STT provider returned an unexpected response format.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Remote Agent — every lane. These six CAUSES are lane-agnostic running
         // copy: they reach an OpenRouter user who operates no server, so they
@@ -539,9 +539,9 @@ enum AppError: LocalizedError {
         // cannot back. Every one is a NEW key — a reworded `defaultValue:` is
         // inert against a catalogued English value.
         case .remoteAgentNotConfigured:
-            return String(localized: "remoteAgent.error.notConfigured.v2", defaultValue: "No AI is configured.")
+            return String(localized: "remoteAgent.error.notConfigured.v2", defaultValue: "No AI is configured.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentUnreachable:
-            return String(localized: "remoteAgent.error.unreachable.v2", defaultValue: "Couldn't reach your AI.")
+            return String(localized: "remoteAgent.error.unreachable.v2", defaultValue: "Couldn't reach your AI.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentAuthFailed:
             // `.v2`: 26 carries 401 AND 403, and a 403 is a refusal that can
             // happen before any credential is looked at — an origin that
@@ -553,11 +553,11 @@ enum AppError: LocalizedError {
             // no refuser, matching `unexpectedStatus`'s restraint.
             // Catalog-value-wins rule: a reworded existing key ships the OLD
             // string, so this is a new key.
-            return String(localized: "remoteAgent.error.authFailed.v3", defaultValue: "The request to your AI was refused.")
+            return String(localized: "remoteAgent.error.authFailed.v3", defaultValue: "The request to your AI was refused.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentTimeout:
-            return String(localized: "remoteAgent.error.timeout.v2", defaultValue: "Your AI took too long to respond.")
+            return String(localized: "remoteAgent.error.timeout.v2", defaultValue: "Your AI took too long to respond.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentServerError:
-            return String(localized: "remoteAgent.error.serverError.v2", defaultValue: "Your AI reported an error.")
+            return String(localized: "remoteAgent.error.serverError.v2", defaultValue: "Your AI reported an error.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentUnexpectedStatus(let status):
             // Two keys per lane, not one interpolation with a placeholder value:
             // a reconstructed failure has no number, and "HTTP 0" would be a lie.
@@ -568,23 +568,23 @@ enum AppError: LocalizedError {
             // contradicts it in the same banner.
             if let status {
                 if context.hidesURLField {
-                    return String(localized: "remoteAgent.error.unexpectedStatus.hosted", defaultValue: "Your AI answered with HTTP \(status), which Conduck doesn't recognise.")
+                    return String(localized: "remoteAgent.error.unexpectedStatus.hosted", defaultValue: "Your AI answered with HTTP \(status), which Conduck doesn't recognise.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 }
-                return String(localized: "remoteAgent.error.unexpectedStatus", defaultValue: "Your gateway answered with HTTP \(status), which Conduck doesn't recognise.")
+                return String(localized: "remoteAgent.error.unexpectedStatus", defaultValue: "Your gateway answered with HTTP \(status), which Conduck doesn't recognise.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.unexpectedStatus.unknown.hosted", defaultValue: "Your AI answered in a way Conduck doesn't recognise.")
+                return String(localized: "remoteAgent.error.unexpectedStatus.unknown.hosted", defaultValue: "Your AI answered in a way Conduck doesn't recognise.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.unexpectedStatus.unknown", defaultValue: "Your gateway answered in a way Conduck doesn't recognise.")
+            return String(localized: "remoteAgent.error.unexpectedStatus.unknown", defaultValue: "Your gateway answered in a way Conduck doesn't recognise.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentServiceUnavailable:
-            return String(localized: "remoteAgent.error.serviceUnavailable", defaultValue: "A server involved in this connection is temporarily unavailable.")
+            return String(localized: "remoteAgent.error.serviceUnavailable", defaultValue: "A server involved in this connection is temporarily unavailable.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentNotEstablished:
             // The delivery claim is the load-bearing half and is lane-independent;
             // only the noun for the far end changes.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.notEstablished.hosted", defaultValue: "Conduck couldn't open a connection to your AI.")
+                return String(localized: "remoteAgent.error.notEstablished.hosted", defaultValue: "Conduck couldn't open a connection to your AI.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.notEstablished", defaultValue: "Conduck couldn't open a connection to your gateway.")
+            return String(localized: "remoteAgent.error.notEstablished", defaultValue: "Conduck couldn't open a connection to your gateway.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentDefaultNeedsSetup(let gatewayName):
             // Two keys, not one interpolation: a 74 reconstructed off the wire
             // carries no name, and "Your default AI, , isn't available" is a defect.
@@ -599,22 +599,22 @@ enum AppError: LocalizedError {
             // it states the fact that holds either way rather than assigning the
             // user a chore that may not exist.
             if let gatewayName {
-                return String(localized: "remoteAgent.error.defaultUnavailable", defaultValue: "Your default AI, \(gatewayName), isn't available on this device.")
+                return String(localized: "remoteAgent.error.defaultUnavailable", defaultValue: "Your default AI, \(gatewayName), isn't available on this device.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             // Serves THREE readings and has to be true for all of them: a broken
             // default whose name could not be resolved, a device with no default
             // chosen at all, and a 74 rebuilt from a bare code. Hence "doesn't
             // know which AI to use" rather than naming a fault.
-            return String(localized: "remoteAgent.error.defaultNeedsSetup.unnamed", defaultValue: "Conduck doesn't know which AI to use for new chats.")
+            return String(localized: "remoteAgent.error.defaultNeedsSetup.unnamed", defaultValue: "Conduck doesn't know which AI to use for new chats.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentCertMismatch:
             // Each `*CertMismatch` line names the SERVER whose key disagreed;
             // the remedy is shared and lives in `recoverySuggestion`. Never
             // phrases this as the fingerprint having "changed" — the app cannot
             // know that, and on the interception shape this verdict now has,
             // nothing on the user's server changed at all.
-            return String(localized: "remoteAgent.error.certMismatch", defaultValue: "Your gateway's certificate doesn't match the fingerprint you pinned.")
+            return String(localized: "remoteAgent.error.certMismatch", defaultValue: "Your gateway's certificate doesn't match the fingerprint you pinned.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentInvalidResponse:
-            return String(localized: "remoteAgent.error.invalidResponse.v2", defaultValue: "Your AI returned an unexpected response.")
+            return String(localized: "remoteAgent.error.invalidResponse.v2", defaultValue: "Your AI returned an unexpected response.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentVisionUnsupported:
             // "gateway", never "model" (vocabulary rule): the client
             // can't attribute the decline to the adapter vs the engine — the
@@ -628,103 +628,103 @@ enum AppError: LocalizedError {
             // the remedy's is which lever the reader owns. Same hedge on both
             // arms — still no claim about the adapter versus the engine.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.visionUnsupported.hosted", defaultValue: "Your AI couldn't use the photo.")
+                return String(localized: "remoteAgent.error.visionUnsupported.hosted", defaultValue: "Your AI couldn't use the photo.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.visionUnsupported", defaultValue: "This gateway couldn't use the photo.")
+            return String(localized: "remoteAgent.error.visionUnsupported", defaultValue: "This gateway couldn't use the photo.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentImageTooLarge:
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.imageTooLarge.hosted", defaultValue: "An attached image was too large for your AI.")
+                return String(localized: "remoteAgent.error.imageTooLarge.hosted", defaultValue: "An attached image was too large for your AI.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.imageTooLarge", defaultValue: "An attached image was too large for your gateway.")
+            return String(localized: "remoteAgent.error.imageTooLarge", defaultValue: "An attached image was too large for your gateway.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentOutOfCredits:
             // Cause only, like its 429 sibling. The remedy is an account
             // balance, which belongs in `recoverySuggestion` where the two-slot
             // surfaces can reach it — Diagnostics renders the fix row from it,
             // and the gateway editor renders nothing else. `descriptionWithRecovery`
             // rejoins the pair for the single-line surfaces.
-            return String(localized: "remoteAgent.error.outOfCredits", defaultValue: "Your AI provider is out of credits.")
+            return String(localized: "remoteAgent.error.outOfCredits", defaultValue: "Your AI provider is out of credits.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentModelUnavailable:
-            return String(localized: "remoteAgent.error.modelUnavailable", defaultValue: "That AI model isn't available.")
+            return String(localized: "remoteAgent.error.modelUnavailable", defaultValue: "That AI model isn't available.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentContextTooLong:
-            return String(localized: "remoteAgent.error.contextTooLong", defaultValue: "This chat got too long for the model.")
+            return String(localized: "remoteAgent.error.contextTooLong", defaultValue: "This chat got too long for the model.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentRateLimited:
-            return String(localized: "remoteAgent.error.rateLimited", defaultValue: "Your AI provider is rate-limiting you.")
+            return String(localized: "remoteAgent.error.rateLimited", defaultValue: "Your AI provider is rate-limiting you.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentEndpointUnexpectedResponse:
             // "Something", not "your AI": on a fixed-URL lane 58's own remedy
             // says the answer came from something OTHER than the provider — a
             // captive portal, an intercepting proxy — so the cause must not
             // attribute it to the AI in the sentence before.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.endpointUnexpectedResponse.hosted", defaultValue: "Something answered, but not like an AI endpoint.")
+                return String(localized: "remoteAgent.error.endpointUnexpectedResponse.hosted", defaultValue: "Something answered, but not like an AI endpoint.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.endpointUnexpectedResponse", defaultValue: "Your gateway answered, but not like an AI endpoint.")
+            return String(localized: "remoteAgent.error.endpointUnexpectedResponse", defaultValue: "Your gateway answered, but not like an AI endpoint.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentEndpointWrongEnvelope:
             // 62 is 58 wearing JSON, and the same restraint applies for the same
             // reason — the answerer is unidentified on a lane whose URL the app
             // owns.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.endpointWrongEnvelope.hosted", defaultValue: "Something answered JSON, but not in the shape Conduck needs.")
+                return String(localized: "remoteAgent.error.endpointWrongEnvelope.hosted", defaultValue: "Something answered JSON, but not in the shape Conduck needs.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.endpointWrongEnvelope", defaultValue: "Your gateway answered JSON, but not in the shape Conduck needs.")
+            return String(localized: "remoteAgent.error.endpointWrongEnvelope", defaultValue: "Your gateway answered JSON, but not in the shape Conduck needs.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentEndpointNotFound:
             // "the route", not "the AI endpoint": a fixed-URL 404 is the
             // provider's own routing, and the endpoint is not the reader's to
             // have got wrong. Matches the hosted remedy, which says the provider
             // didn't recognise that route.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.endpointNotFound.hosted", defaultValue: "Your AI provider didn't recognise the route.")
+                return String(localized: "remoteAgent.error.endpointNotFound.hosted", defaultValue: "Your AI provider didn't recognise the route.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.endpointNotFound", defaultValue: "Your gateway didn't recognise the AI endpoint.")
+            return String(localized: "remoteAgent.error.endpointNotFound", defaultValue: "Your gateway didn't recognise the AI endpoint.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentModelRequired:
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.modelRequired.hosted", defaultValue: "Your AI needs you to name a model.")
+                return String(localized: "remoteAgent.error.modelRequired.hosted", defaultValue: "Your AI needs you to name a model.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.modelRequired", defaultValue: "Your gateway needs you to name a model.")
+            return String(localized: "remoteAgent.error.modelRequired", defaultValue: "Your gateway needs you to name a model.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Custom OpenAI-compatible STT endpoint
         case .sttCustomEndpointNotConfigured:
-            return String(localized: "stt.error.customEndpointNotConfigured", defaultValue: "No custom STT endpoint is configured.")
+            return String(localized: "stt.error.customEndpointNotConfigured", defaultValue: "No custom STT endpoint is configured.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttCustomCertMismatch:
-            return String(localized: "stt.error.customCertMismatch", defaultValue: "Your custom STT server's certificate doesn't match the fingerprint you pinned.")
+            return String(localized: "stt.error.customCertMismatch", defaultValue: "Your custom STT server's certificate doesn't match the fingerprint you pinned.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Cloud Text-to-Speech (internal fallback signals — the spoken reply
         // silently falls back to Apple's voice, so these are rarely surfaced).
         case .ttsProviderUnreachable:
-            return String(localized: "tts.error.providerUnreachable", defaultValue: "Couldn't reach the voice provider. Using the built-in voice.")
+            return String(localized: "tts.error.providerUnreachable", defaultValue: "Couldn't reach the voice provider. Using the built-in voice.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsSynthesisFailed:
-            return String(localized: "tts.error.synthesisFailed", defaultValue: "Couldn't generate the spoken reply. Using the built-in voice.")
+            return String(localized: "tts.error.synthesisFailed", defaultValue: "Couldn't generate the spoken reply. Using the built-in voice.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsEmptyAudio:
-            return String(localized: "tts.error.emptyAudio", defaultValue: "The voice provider returned no audio. Using the built-in voice.")
+            return String(localized: "tts.error.emptyAudio", defaultValue: "The voice provider returned no audio. Using the built-in voice.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsUnauthorized:
-            return String(localized: "tts.error.unauthorized", defaultValue: "Your API key isn't allowed to make spoken replies. Using the built-in voice.")
+            return String(localized: "tts.error.unauthorized", defaultValue: "Your API key isn't allowed to make spoken replies. Using the built-in voice.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsRateLimited:
-            return String(localized: "tts.error.rateLimited", defaultValue: "The voice provider is rate-limited or out of quota. Using the built-in voice.")
+            return String(localized: "tts.error.rateLimited", defaultValue: "The voice provider is rate-limited or out of quota. Using the built-in voice.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsContentBlocked:
-            return String(localized: "tts.error.contentBlocked", defaultValue: "The voice provider's safety filter blocked this text. Using the built-in voice.")
+            return String(localized: "tts.error.contentBlocked", defaultValue: "The voice provider's safety filter blocked this text. Using the built-in voice.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Custom OpenAI-compatible TTS endpoint
         case .ttsCustomEndpointNotConfigured:
-            return String(localized: "tts.error.customEndpointNotConfigured", defaultValue: "No custom voice endpoint is configured.")
+            return String(localized: "tts.error.customEndpointNotConfigured", defaultValue: "No custom voice endpoint is configured.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsCustomCertMismatch:
-            return String(localized: "tts.error.customCertMismatch", defaultValue: "Your custom voice server's certificate doesn't match the fingerprint you pinned.")
+            return String(localized: "tts.error.customCertMismatch", defaultValue: "Your custom voice server's certificate doesn't match the fingerprint you pinned.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Agent file transfer (user-run file-server). Never name the credential.
         case .fileTransferNotConfigured:
-            return String(localized: "fileTransfer.error.notConfigured", defaultValue: "File transfer isn't set up for this gateway.")
+            return String(localized: "fileTransfer.error.notConfigured", defaultValue: "File transfer isn't set up for this gateway.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferUnreachable:
-            return String(localized: "fileTransfer.error.unreachable", defaultValue: "Couldn't reach your file-server.")
+            return String(localized: "fileTransfer.error.unreachable", defaultValue: "Couldn't reach your file-server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferAuthFailed:
-            return String(localized: "fileTransfer.error.authFailed", defaultValue: "Your file-server rejected the connection.")
+            return String(localized: "fileTransfer.error.authFailed", defaultValue: "Your file-server rejected the connection.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferCertMismatch:
-            return String(localized: "fileTransfer.error.certMismatch", defaultValue: "Your file server's certificate doesn't match the fingerprint you pinned.")
+            return String(localized: "fileTransfer.error.certMismatch", defaultValue: "Your file server's certificate doesn't match the fingerprint you pinned.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferServerError:
-            return String(localized: "fileTransfer.error.serverError", defaultValue: "Your file-server reported an error.")
+            return String(localized: "fileTransfer.error.serverError", defaultValue: "Your file-server reported an error.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferUploadFailed:
-            return String(localized: "fileTransfer.error.uploadFailed", defaultValue: "Couldn't upload the file to your file server.")
+            return String(localized: "fileTransfer.error.uploadFailed", defaultValue: "Couldn't upload the file to your file server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferFileUnavailable:
-            return String(localized: "fileTransfer.error.fileUnavailable", defaultValue: "That file is no longer on your file server.")
+            return String(localized: "fileTransfer.error.fileUnavailable", defaultValue: "That file is no longer on your file server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferNotAFileServer:
-            return String(localized: "fileTransfer.error.notAFileServer", defaultValue: "That address answered, but it isn't serving your files.")
+            return String(localized: "fileTransfer.error.notAFileServer", defaultValue: "That address answered, but it isn't serving your files.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Certificate not trusted. Each line names the SERVER whose certificate
         // was refused (the banner can surface far from the screen that
@@ -732,42 +732,42 @@ enum AppError: LocalizedError {
         // Never phrase this as the certificate having "changed" — nothing
         // changed, and implying it did reads as an attack in progress.
         case .remoteAgentCertUntrusted:
-            return String(localized: "remoteAgent.error.certUntrusted", defaultValue: "This device doesn't trust your gateway's certificate.")
+            return String(localized: "remoteAgent.error.certUntrusted", defaultValue: "This device doesn't trust your gateway's certificate.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttCustomCertUntrusted:
-            return String(localized: "stt.error.customCertUntrusted", defaultValue: "This device doesn't trust your custom STT server's certificate.")
+            return String(localized: "stt.error.customCertUntrusted", defaultValue: "This device doesn't trust your custom STT server's certificate.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsCustomCertUntrusted:
-            return String(localized: "tts.error.customCertUntrusted", defaultValue: "This device doesn't trust your custom voice server's certificate.")
+            return String(localized: "tts.error.customCertUntrusted", defaultValue: "This device doesn't trust your custom voice server's certificate.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferCertUntrusted:
-            return String(localized: "fileTransfer.error.certUntrusted", defaultValue: "This device doesn't trust your file server's certificate.")
+            return String(localized: "fileTransfer.error.certUntrusted", defaultValue: "This device doesn't trust your file server's certificate.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Pin could not be computed. Each line names the SERVER and the actual
         // cause — the KEY TYPE, not the certificate — so the user does not read
         // it as "my certificate is broken". Never says the certificate doesn't
         // match: nothing was compared.
         case .remoteAgentCertKeyUnpinnable:
-            return String(localized: "remoteAgent.error.certKeyUnpinnable", defaultValue: "Your gateway's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
+            return String(localized: "remoteAgent.error.certKeyUnpinnable", defaultValue: "Your gateway's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttCustomCertKeyUnpinnable:
-            return String(localized: "stt.error.customCertKeyUnpinnable", defaultValue: "Your custom STT server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
+            return String(localized: "stt.error.customCertKeyUnpinnable", defaultValue: "Your custom STT server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ttsCustomCertKeyUnpinnable:
-            return String(localized: "tts.error.customCertKeyUnpinnable", defaultValue: "Your custom voice server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
+            return String(localized: "tts.error.customCertKeyUnpinnable", defaultValue: "Your custom voice server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferCertKeyUnpinnable:
-            return String(localized: "fileTransfer.error.certKeyUnpinnable", defaultValue: "Your file server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
+            return String(localized: "fileTransfer.error.certKeyUnpinnable", defaultValue: "Your file server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Names the desk and the recording, and says "just now" rather than
         // naming a cause: what refused is a local write, and the person can act
         // on none of the reasons it might have. The sheet renders this line
         // beside a Try Again that works.
         case .workDeskWriteFailed:
-            return String(localized: "workboard.voice.error.deskWrite", defaultValue: "Work couldn’t save this recording just now.")
+            return String(localized: "workboard.voice.error.deskWrite", defaultValue: "Work couldn’t save this recording just now.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         // Names the artifact that is actually missing. The recording and the
         // words may both be on the desk when this is shown, and 78's sentence
         // would deny what the receipt beside it just said.
         case .workScreenshotWriteFailed:
-            return String(localized: "workboard.voice.error.screenshotWrite", defaultValue: "Work couldn’t save the screenshot just now.")
+            return String(localized: "workboard.voice.error.screenshotWrite", defaultValue: "Work couldn’t save the screenshot just now.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
 
         case .unknown(let error):
-            return String(localized: "api.error.unknown", defaultValue: "An unexpected error occurred: \(error.localizedDescription)")
+            return String(localized: "api.error.unknown", defaultValue: "An unexpected error occurred: \(error.localizedDescription)", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -803,37 +803,37 @@ enum AppError: LocalizedError {
     func recoverySuggestion(in context: RemoteAgentFailureContext) -> String? {
         switch self {
         case .noInternetConnection:
-            return String(localized: "network.error.noConnection.recovery", defaultValue: "Check your connection and try again.")
+            return String(localized: "network.error.noConnection.recovery", defaultValue: "Check your connection and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .requestTimeout:
-            return String(localized: "network.error.timeout.recovery", defaultValue: "Try a shorter recording or check your signal.")
+            return String(localized: "network.error.timeout.recovery", defaultValue: "Try a shorter recording or check your signal.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .persistentNetworkFailure:
-            return String(localized: "network.error.persistentFailure.recovery", defaultValue: "Better reception or Wi-Fi usually sorts it.")
+            return String(localized: "network.error.persistentFailure.recovery", defaultValue: "Better reception or Wi-Fi usually sorts it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttAuthFailed:
-            return String(localized: "stt.error.authFailed.recovery", defaultValue: "Verify the key in your provider dashboard, then paste it again.")
+            return String(localized: "stt.error.authFailed.recovery", defaultValue: "Verify the key in your provider dashboard, then paste it again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttQuotaExceeded:
-            return String(localized: "stt.error.quotaExceeded.recovery", defaultValue: "Top up your provider account or wait for the next billing cycle.")
+            return String(localized: "stt.error.quotaExceeded.recovery", defaultValue: "Top up your provider account or wait for the next billing cycle.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttTooManyRequests:
-            return String(localized: "stt.error.tooManyRequests.recovery", defaultValue: "Should be back in a minute or two.")
+            return String(localized: "stt.error.tooManyRequests.recovery", defaultValue: "Should be back in a minute or two.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttServerError:
-            return String(localized: "stt.error.serverError.recovery", defaultValue: "Should be back in a minute or two.")
+            return String(localized: "stt.error.serverError.recovery", defaultValue: "Should be back in a minute or two.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .appleSpeechModelNotInstalled:
-            return String(localized: "stt.error.appleSpeechModelNotInstalled.recovery.v2", defaultValue: "Switch to a cloud voice provider in Settings → Voice, or try a different language.")
+            return String(localized: "stt.error.appleSpeechModelNotInstalled.recovery.v2", defaultValue: "Switch to a cloud voice provider in Settings → Voice, or try a different language.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .appleSpeechLanguageUnsupported:
-            return String(localized: "stt.error.appleSpeechLanguageUnsupported.recovery", defaultValue: "Switch to a cloud provider in Settings to transcribe this language.")
+            return String(localized: "stt.error.appleSpeechLanguageUnsupported.recovery", defaultValue: "Switch to a cloud provider in Settings to transcribe this language.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .speechPermissionDenied:
-            return String(localized: "stt.error.speechPermissionDenied.recovery", defaultValue: "Allow it in Settings → Privacy & Security → Speech Recognition. Watch recordings transcribe on your iPhone — enable it there.")
+            return String(localized: "stt.error.speechPermissionDenied.recovery", defaultValue: "Allow it in Settings → Privacy & Security → Speech Recognition. Watch recordings transcribe on your iPhone — enable it there.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttProviderUnreachable:
-            return String(localized: "stt.error.providerUnreachable.recovery", defaultValue: "Should be back in a minute or two.")
+            return String(localized: "stt.error.providerUnreachable.recovery", defaultValue: "Should be back in a minute or two.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .apiFailure:
-            return String(localized: "api.error.failure.recovery", defaultValue: "Should be back in a minute or two.")
+            return String(localized: "api.error.failure.recovery", defaultValue: "Should be back in a minute or two.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttMissingAPIKey:
-            return String(localized: "stt.error.missingKey.recovery", defaultValue: "Open Settings → STT API Key to add one.")
+            return String(localized: "stt.error.missingKey.recovery", defaultValue: "Open Settings → STT API Key to add one.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .turnStoppedBeforeSend:
             // States the delivery fact the counters DID prove, then invites the
             // send the user is free to make. No instruction to go and check
             // anything: there is nothing to check.
             return String(localized: "remoteAgent.error.stoppedBeforeSend.recovery",
-                          defaultValue: "Nothing left this device, so nothing reached your AI. Send it again whenever you like.")
+                          defaultValue: "Nothing left this device, so nothing reached your AI. Send it again whenever you like.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .insecureConnectionBlocked:
             // The fixes, in the order a self-hoster will try them, and no
             // lecture about why encryption is good. ONE string for every lane —
@@ -841,25 +841,25 @@ enum AppError: LocalizedError {
             // a voice endpoint alike, so a per-lane spelling would be three
             // chances to drift with nothing gained.
             return String(localized: "remoteAgent.error.insecureBlocked.recovery.v2",
-                          defaultValue: "Plain http:// only reaches an address on your own network. Use the server's IP address or its .local name, or put it behind https://.")
+                          defaultValue: "Plain http:// only reaches an address on your own network. Use the server's IP address or its .local name, or put it behind https://.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttKeyUnreadable:
             // An EXPLICIT arm rather than the generic "Try again.": the fix is a
             // specific act (unlock the device) that a bare retry invitation does
             // not name, and the surfaces that render one line would otherwise
             // drop the remedy entirely.
-            return String(localized: "stt.error.keyUnreadable.recovery", defaultValue: "Unlock this device, then open Conduck and retry.")
+            return String(localized: "stt.error.keyUnreadable.recovery", defaultValue: "Unlock this device, then open Conduck and retry.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioInvalid:
-            return String(localized: "audio.error.invalid.recovery", defaultValue: "Record new audio.")
+            return String(localized: "audio.error.invalid.recovery", defaultValue: "Record new audio.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioMicBusy:
-            return String(localized: "audio.error.micBusy.recovery", defaultValue: "Finish the other recording first, then try again.")
+            return String(localized: "audio.error.micBusy.recovery", defaultValue: "Finish the other recording first, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioProcessingFailed:
-            return String(localized: "audio.error.processingFailed.recovery", defaultValue: "Record new audio.")
+            return String(localized: "audio.error.processingFailed.recovery", defaultValue: "Record new audio.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioTooLarge:
-            return String(localized: "audio.error.tooLarge.recovery", defaultValue: "Split it into shorter recordings.")
+            return String(localized: "audio.error.tooLarge.recovery", defaultValue: "Split it into shorter recordings.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .noSpeechDetected:
-            return String(localized: "audio.error.noSpeechDetected.recovery", defaultValue: "Try recording again.")
+            return String(localized: "audio.error.noSpeechDetected.recovery", defaultValue: "Try recording again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttDecodingFailure:
-            return String(localized: "stt.error.decodingFailure.recovery", defaultValue: "If this persists, the provider may have changed its API.")
+            return String(localized: "stt.error.decodingFailure.recovery", defaultValue: "If this persists, the provider may have changed its API.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentNotConfigured:
             // A lane with a fixed URL has nothing for the user to type but the
             // key, so naming an address sends them hunting for a field that is
@@ -867,9 +867,9 @@ enum AppError: LocalizedError {
             // "bearer token", and the secrets vocabulary is "key" (chat/API) or
             // "password" (file lane) — the wire keys keep their own names.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.notConfigured.recovery.hosted", defaultValue: "Open Settings → Personal AI and add your key.")
+                return String(localized: "remoteAgent.error.notConfigured.recovery.hosted", defaultValue: "Open Settings → Personal AI and add your key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.notConfigured.recovery.v2", defaultValue: "Open Settings → Personal AI and add its address and key.")
+            return String(localized: "remoteAgent.error.notConfigured.recovery.v2", defaultValue: "Open Settings → Personal AI and add its address and key.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentDefaultNeedsSetup:
             // An EXPLICIT arm, never `default:`: the generic "Try again."
             // `descriptionWithRecovery` deliberately drops would leave the one
@@ -882,7 +882,7 @@ enum AppError: LocalizedError {
             // is WHICH AI, not a missing credential. The first clause
             // defuses the panic the false "nothing is configured" banner caused,
             // before asking the user for anything.
-            return String(localized: "remoteAgent.error.defaultNeedsSetup.recovery", defaultValue: "Your other AIs still work. Open Settings → Personal AI and pick one for new chats.")
+            return String(localized: "remoteAgent.error.defaultNeedsSetup.recovery", defaultValue: "Your other AIs still work. Open Settings → Personal AI and pick one for new chats.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentUnreachable:
             // `.v2`: 19 is now the UNCERTAIN bucket. The codes that prove a
             // connection never opened moved to 73, and a genuinely offline
@@ -898,9 +898,9 @@ enum AppError: LocalizedError {
             // check and no tool run to inspect — the only thing they own is the
             // connection at this end.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.unreachable.recovery.hosted", defaultValue: "Check your internet connection, then try again. Conduck can't tell whether the request arrived.")
+                return String(localized: "remoteAgent.error.unreachable.recovery.hosted", defaultValue: "Check your internet connection, then try again. Conduck can't tell whether the request arrived.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.unreachable.recovery.v2", defaultValue: "Check the gateway is reachable from this device. Conduck can't tell whether the request arrived, so if it could run tools, check the gateway before trying again.")
+            return String(localized: "remoteAgent.error.unreachable.recovery.v2", defaultValue: "Check the gateway is reachable from this device. Conduck can't tell whether the request arrived, so if it could run tools, check the gateway before trying again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentAuthFailed:
             // `.v2`: 26 has two live causes and cannot tell them apart here — a
             // credential the gateway rejected, and an origin that refuses the
@@ -921,12 +921,12 @@ enum AppError: LocalizedError {
             // This is `friendlyGatewayMessage`'s hosted verdict, lifted here so
             // one condition ships one sentence.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.authFailed.recovery.hosted", defaultValue: "Check your API key in your provider's dashboard, then paste it again.")
+                return String(localized: "remoteAgent.error.authFailed.recovery.hosted", defaultValue: "Check your API key in your provider's dashboard, then paste it again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             // `.v3` rather than an edit of `.v2`: the sentence changes ("token"
             // → "key", per the two-word secrets vocabulary), and a reworded key
             // ships the catalogued value, which would make the edit inert.
-            return String(localized: "remoteAgent.error.authFailed.recovery.v3", defaultValue: "Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses.")
+            return String(localized: "remoteAgent.error.authFailed.recovery.v3", defaultValue: "Check the key if your server needs one, and check anything in front of it — a proxy or tunnel can forward the request in a form it refuses.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentTimeout:
             // `.v2`: a timeout is the other half of the uncertain bucket — the
             // gateway may still be working, and a second attempt can repeat
@@ -935,55 +935,55 @@ enum AppError: LocalizedError {
             // The repeat-cost warning is the part that holds on every lane; only
             // the "go check it" half needs a server the user administers.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.timeout.recovery.hosted", defaultValue: "It may still be working on this one. Another attempt could repeat the work and the cost.")
+                return String(localized: "remoteAgent.error.timeout.recovery.hosted", defaultValue: "It may still be working on this one. Another attempt could repeat the work and the cost.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.timeout.recovery.v2", defaultValue: "It may still be working on this one. Check the gateway before trying again, because another attempt could repeat the work and the cost.")
+            return String(localized: "remoteAgent.error.timeout.recovery.v2", defaultValue: "It may still be working on this one. Check the gateway before trying again, because another attempt could repeat the work and the cost.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentServerError:
             // A 5xx from a provider the user does not run is the provider's, and
             // there is no honest instruction to give — so this says the true
             // thing rather than inventing an action. Its self-hosted twin sends
             // the user to the logs, which is a real and useful place to look.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.serverError.recovery.hosted", defaultValue: "Try again in a moment.")
+                return String(localized: "remoteAgent.error.serverError.recovery.hosted", defaultValue: "Try again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.serverError.recovery", defaultValue: "Check the gateway logs, then try again.")
+            return String(localized: "remoteAgent.error.serverError.recovery", defaultValue: "Check the gateway logs, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentUnexpectedStatus:
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.unexpectedStatus.recovery.hosted", defaultValue: "That came from the provider or the network between you. Try again.")
+                return String(localized: "remoteAgent.error.unexpectedStatus.recovery.hosted", defaultValue: "That came from the provider or the network between you. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.unexpectedStatus.recovery", defaultValue: "That came from your server, or from something in front of it. Check both, then try again.")
+            return String(localized: "remoteAgent.error.unexpectedStatus.recovery", defaultValue: "That came from your server, or from something in front of it. Check both, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentServiceUnavailable:
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.serviceUnavailable.recovery.hosted", defaultValue: "The provider or something on the route is unavailable. Try again shortly.")
+                return String(localized: "remoteAgent.error.serviceUnavailable.recovery.hosted", defaultValue: "The provider or something on the route is unavailable. Try again shortly.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.serviceUnavailable.recovery", defaultValue: "Check your gateway, anything in front of it such as a tunnel or proxy, and the model provider it uses.")
+            return String(localized: "remoteAgent.error.serviceUnavailable.recovery", defaultValue: "Check your gateway, anything in front of it such as a tunnel or proxy, and the model provider it uses.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentNotEstablished:
             // "Check the address is still current" needs an address the user
             // typed. On a fixed-URL lane the app owns it, so the only thing left
             // at this end is the connection — and the delivery claim, which is
             // the sentence that actually matters, is lane-independent.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.notEstablished.recovery.hosted", defaultValue: "Check your internet connection. The request most likely never left this device.")
+                return String(localized: "remoteAgent.error.notEstablished.recovery.hosted", defaultValue: "Check your internet connection. The request most likely never left this device.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.notEstablished.recovery", defaultValue: "Check the address is still current and the gateway is running. The request most likely never reached it.")
+            return String(localized: "remoteAgent.error.notEstablished.recovery", defaultValue: "Check the address is still current and the gateway is running. The request most likely never reached it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentInvalidResponse:
             // The self-hosted remedy names the endpoint contract the user has to
             // stand up. On a fixed-URL lane that endpoint is the provider's and
             // already exists, so the levers are a retry and — since that lane
             // always has a model field — a different model.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.invalidResponse.recovery.hosted", defaultValue: "Try again, or pick a different model.")
+                return String(localized: "remoteAgent.error.invalidResponse.recovery.hosted", defaultValue: "Try again, or pick a different model.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.invalidResponse.recovery", defaultValue: "Check the gateway is running an OpenAI-compatible /v1/chat/completions endpoint.")
+            return String(localized: "remoteAgent.error.invalidResponse.recovery", defaultValue: "Check the gateway is running an OpenAI-compatible /v1/chat/completions endpoint.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentVisionUnsupported:
             // Dispatches on the MODEL policy, not the lane: wherever Conduck
             // shows a model field, changing the model is the direct fix, and
             // where it hides one (OpenClaw / Hermes pick server-side) the only
             // lever is the server's own photo support.
             if context.userCanChooseModel {
-                return String(localized: "remoteAgent.error.visionUnsupported.recovery.modelChoice", defaultValue: "Pick a model that accepts images, or keep chatting with text.")
+                return String(localized: "remoteAgent.error.visionUnsupported.recovery.modelChoice", defaultValue: "Pick a model that accepts images, or keep chatting with text.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.visionUnsupported.recovery", defaultValue: "Enable photo support on your gateway, or keep chatting with text.")
+            return String(localized: "remoteAgent.error.visionUnsupported.recovery", defaultValue: "Enable photo support on your gateway, or keep chatting with text.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentImageTooLarge:
             // "Raise your gateway's image-size limit" is a setting on a machine
             // a fixed-URL user does not have — and neither is there a Conduck
@@ -994,34 +994,34 @@ enum AppError: LocalizedError {
             // the source image, and the arm says that and stops rather than
             // naming a screen the reader would go looking for.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.imageTooLarge.recovery.hosted", defaultValue: "Try a smaller image.")
+                return String(localized: "remoteAgent.error.imageTooLarge.recovery.hosted", defaultValue: "Try a smaller image.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.imageTooLarge.recovery", defaultValue: "Your gateway rejected the image as too large. Try a smaller image, or raise your gateway's image-size limit.")
+            return String(localized: "remoteAgent.error.imageTooLarge.recovery", defaultValue: "Your gateway rejected the image as too large. Try a smaller image, or raise your gateway's image-size limit.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentOutOfCredits:
             // BYO-key: the balance is on the user's OWN provider account, so the
             // remedy points there and nowhere else. Without this arm 52 falls to
             // the generic "Try again." — which the gateway editor renders as its
             // WHOLE message, telling a user with no credit to keep retrying.
-            return String(localized: "remoteAgent.error.outOfCredits.recovery", defaultValue: "Add credits with your provider, then try again.")
+            return String(localized: "remoteAgent.error.outOfCredits.recovery", defaultValue: "Add credits with your provider, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentModelUnavailable:
             // THE arm a hosted-vs-self-hosted flag gets backwards. 55 is correct
             // as written for OpenRouter and for customs, and a dead end on
             // OpenClaw / Hermes: both declare `model == .unsupported`, Conduck
             // hides the field, and there is no model name in Settings to check.
             if context.userCanChooseModel {
-                return String(localized: "remoteAgent.error.modelUnavailable.recovery", defaultValue: "Check the model name in Settings, or pick a different one.")
+                return String(localized: "remoteAgent.error.modelUnavailable.recovery", defaultValue: "Check the model name in Settings, or pick a different one.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.modelUnavailable.recovery.serverChosen", defaultValue: "Check the model configured on your server.")
+            return String(localized: "remoteAgent.error.modelUnavailable.recovery.serverChosen", defaultValue: "Check the model configured on your server.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentContextTooLong:
             // Same inversion as 55. "Switch to a model with a bigger context
             // window" is an instruction the user cannot follow where the model
             // field is hidden — a new chat is the whole remedy there.
             if context.userCanChooseModel {
-                return String(localized: "remoteAgent.error.contextTooLong.recovery", defaultValue: "Start a new chat, or switch to a model with a bigger context window.")
+                return String(localized: "remoteAgent.error.contextTooLong.recovery", defaultValue: "Start a new chat, or switch to a model with a bigger context window.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.contextTooLong.recovery.serverChosen", defaultValue: "Start a new chat to shorten the history.")
+            return String(localized: "remoteAgent.error.contextTooLong.recovery.serverChosen", defaultValue: "Start a new chat to shorten the history.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentRateLimited:
-            return String(localized: "remoteAgent.error.rateLimited.recovery", defaultValue: "Wait a moment, then try again — free models often have daily limits.")
+            return String(localized: "remoteAgent.error.rateLimited.recovery", defaultValue: "Wait a moment, then try again — free models often have daily limits.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentEndpointUnexpectedResponse:
             // Deliberately does NOT claim "it returned a web page" — a `{}` body
             // lands here too. The editor pairs this with the per-backend
@@ -1033,22 +1033,22 @@ enum AppError: LocalizedError {
             // is something answering in the provider's place — a captive portal,
             // an intercepting proxy on the network they are on.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.endpointUnexpectedResponse.recovery.hosted", defaultValue: "Something other than the provider answered. Check the network you're on, then try again.")
+                return String(localized: "remoteAgent.error.endpointUnexpectedResponse.recovery.hosted", defaultValue: "Something other than the provider answered. Check the network you're on, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.endpointUnexpectedResponse.recovery", defaultValue: "It answered with something other than an AI endpoint's data. The endpoint may be switched off on your server, or the URL may point at a web page.")
+            return String(localized: "remoteAgent.error.endpointUnexpectedResponse.recovery", defaultValue: "It answered with something other than an AI endpoint's data. The endpoint may be switched off on your server, or the URL may point at a web page.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentEndpointWrongEnvelope:
             // Names the exact rule — this is the likeliest failure of a
             // home-built adapter, and "check your server" would waste its
             // builder's time. The contract URL is the one place the rule lives.
-            return String(localized: "remoteAgent.error.endpointWrongEnvelope.recovery", defaultValue: "The /v1/models reply must be an object with a top-level \"data\" array. Contract: conduck.com/setup/adapter/v1")
+            return String(localized: "remoteAgent.error.endpointWrongEnvelope.recovery", defaultValue: "The /v1/models reply must be an object with a top-level \"data\" array. Contract: conduck.com/setup/adapter/v1", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentEndpointNotFound:
             // THE leak this rework exists for: "Check the Gateway URL" rendered
             // inside an editor that has no URL field at all. A fixed-URL lane's
             // 404 is the provider's route, not the user's typo.
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.endpointNotFound.recovery.hosted", defaultValue: "The provider didn't recognise that route. Try again in a moment.")
+                return String(localized: "remoteAgent.error.endpointNotFound.recovery.hosted", defaultValue: "The provider didn't recognise that route. Try again in a moment.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.endpointNotFound.recovery", defaultValue: "Check the Gateway URL is your server's base address, not a full /v1/… path.")
+            return String(localized: "remoteAgent.error.endpointNotFound.recovery", defaultValue: "Check the Gateway URL is your server's base address, not a full /v1/… path.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteAgentModelRequired:
             // Three arms, because 60 asks for the one thing each lane handles
             // differently. Where Conduck hides the model field entirely
@@ -1056,32 +1056,32 @@ enum AppError: LocalizedError {
             // any screen — the default belongs on the server. Where the app owns
             // the URL, the model lives in Settings and nothing else does.
             if !context.userCanChooseModel {
-                return String(localized: "remoteAgent.error.modelRequired.recovery.serverChosen", defaultValue: "Set a default model on your server, then try again.")
+                return String(localized: "remoteAgent.error.modelRequired.recovery.serverChosen", defaultValue: "Set a default model on your server, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
             if context.hidesURLField {
-                return String(localized: "remoteAgent.error.modelRequired.recovery.hosted", defaultValue: "Open Settings → Personal AI and pick a model.")
+                return String(localized: "remoteAgent.error.modelRequired.recovery.hosted", defaultValue: "Open Settings → Personal AI and pick a model.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             }
-            return String(localized: "remoteAgent.error.modelRequired.recovery", defaultValue: "Open this gateway's settings and set a Model, for example llama3.")
+            return String(localized: "remoteAgent.error.modelRequired.recovery", defaultValue: "Open this gateway's settings and set a Model, for example llama3.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .sttCustomEndpointNotConfigured:
-            return String(localized: "stt.error.customEndpointNotConfigured.recovery", defaultValue: "Open Settings → STT and add your custom endpoint's URL.")
+            return String(localized: "stt.error.customEndpointNotConfigured.recovery", defaultValue: "Open Settings → STT and add your custom endpoint's URL.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // The two `.v2` keys below carry that suffix because the pre-redesign
         // strings are already in `Localizable.xcstrings`, and the catalog value
         // WINS over `defaultValue:` — rewording the default alone would ship the
         // stale copy. A new key uses its `defaultValue:`.
         case .fileTransferNotConfigured:
-            return String(localized: "fileTransfer.error.notConfigured.recovery.v2", defaultValue: "Open Settings → Personal AI, tap this gateway, and open File transfer.")
+            return String(localized: "fileTransfer.error.notConfigured.recovery.v2", defaultValue: "Open Settings → Personal AI, tap this gateway, and open File transfer.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferUnreachable:
-            return String(localized: "fileTransfer.error.unreachable.recovery", defaultValue: "Check your file-server is running and reachable from this device.")
+            return String(localized: "fileTransfer.error.unreachable.recovery", defaultValue: "Check your file-server is running and reachable from this device.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferAuthFailed:
-            return String(localized: "fileTransfer.error.authFailed.recovery.v2", defaultValue: "Open Settings → Personal AI, tap this gateway, open File transfer, and generate a new password your file server accepts.")
+            return String(localized: "fileTransfer.error.authFailed.recovery.v2", defaultValue: "Open Settings → Personal AI, tap this gateway, open File transfer, and generate a new password your file server accepts.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferServerError:
-            return String(localized: "fileTransfer.error.serverError.recovery", defaultValue: "Check your file-server's logs, then try again.")
+            return String(localized: "fileTransfer.error.serverError.recovery", defaultValue: "Check your file-server's logs, then try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferUploadFailed:
-            return String(localized: "fileTransfer.error.uploadFailed.recovery", defaultValue: "Tap Retry. If it keeps failing, check your file-server is running.")
+            return String(localized: "fileTransfer.error.uploadFailed.recovery", defaultValue: "Tap Retry. If it keeps failing, check your file-server is running.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferFileUnavailable:
-            return String(localized: "fileTransfer.error.fileUnavailable.recovery", defaultValue: "Re-attach the file and send again.")
+            return String(localized: "fileTransfer.error.fileUnavailable.recovery", defaultValue: "Re-attach the file and send again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTransferNotAFileServer:
-            return String(localized: "fileTransfer.error.notAFileServer.recovery", defaultValue: "It's most likely a login page, a dashboard, or the wrong address — not a file server. The file-server URL is a different address and port from your gateway's.")
+            return String(localized: "fileTransfer.error.notAFileServer.recovery", defaultValue: "It's most likely a login page, a dashboard, or the wrong address — not a file server. The file-server URL is a different address and port from your gateway's.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // One cause, ONE remedy: all four certificate-not-trusted codes return
         // the shared text verbatim — the same words the gateway editor and the
         // voice-endpoint test suite render. The fix is on the server, so it
@@ -1114,7 +1114,7 @@ enum AppError: LocalizedError {
     /// refusal is exactly the retry invitation the certificate taxonomy exists
     /// to prevent.
     private static var genericRecovery: String {
-        String(localized: "api.error.unknown.recovery", defaultValue: "Try again.")
+        String(localized: "api.error.unknown.recovery", defaultValue: "Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// What happened AND what to do, as ONE string, for the surfaces that render

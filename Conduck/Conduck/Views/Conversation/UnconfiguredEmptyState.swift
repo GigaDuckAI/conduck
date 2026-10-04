@@ -36,28 +36,28 @@ enum UnconfiguredCopy {
     /// come with an AI — which corrects the assumption every other chat app has
     /// trained users into. This is the only line a scanner reads, so it carries
     /// the proposition rather than echoing the button.
-    static let headline = LocalizedStringResource(
+    static var headline: LocalizedStringResource { LocalizedStringResource(
         "unconfigured.empty.headline",
         defaultValue: "Bring your own AI"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// The two lanes. Names NO vendor: "OpenRouter" is an unexplained noun to
     /// anyone who has not heard of it (and reads as a required third-party
     /// signup), while the chooser — one tap away — names it anyway. Avoids "an AI
     /// you own", which is false for the hosted lane: the user owns the key and the
     /// choice of model, not the model.
-    static let body = LocalizedStringResource(
+    static var body: LocalizedStringResource { LocalizedStringResource(
         "unconfigured.empty.body",
         defaultValue: "Choose how Conduck connects: use a server you control or a hosted model with your own API key."
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// The act — states the outcome and fits every lane. Not "Get Started" (says
     /// nothing, and onboarding just said it) and not "Choose Your AI" (implies a
     /// model catalogue, wrong for a self-hoster who already picked their stack).
-    static let button = LocalizedStringResource(
+    static var button: LocalizedStringResource { LocalizedStringResource(
         "unconfigured.empty.button",
         defaultValue: "Connect Your AI"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// Menu-bar-only tail sentence. The popover is driven by a global shortcut, so
     /// it owes the user that key — no other surface has one, which is the ONLY
@@ -66,7 +66,7 @@ enum UnconfiguredCopy {
         LocalizedStringResource(
             "unconfigured.empty.menuBarShortcut",
             defaultValue: "After setup, press \(shortcut) to talk."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// The OTHER unconfigured state, and the reason this type has two: gateways
@@ -87,10 +87,10 @@ enum UnconfiguredCopy {
         /// another device and equally when its key has not finished syncing. Not
         /// "isn't set up" — that names a chore, and only one of those two
         /// situations has one.
-        static let headline = LocalizedStringResource(
+        static var headline: LocalizedStringResource { LocalizedStringResource(
             "unconfigured.defaultNeedsSetup.headline.v2",
             defaultValue: "Your default AI isn't available here"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
         /// Answers the question the user is actually asking — "but I set these
         /// up?" — before asking them to do anything. Scoped to the menu bar
@@ -108,18 +108,18 @@ enum UnconfiguredCopy {
         /// file applies here too, and one object should not pick up three names
         /// inside one paragraph. "This Mac's" is literal, not hedging — the
         /// default pointer is device-local and does not sync.
-        static let body = LocalizedStringResource(
+        static var body: LocalizedStringResource { LocalizedStringResource(
             "unconfigured.defaultNeedsSetup.body.v2",
             defaultValue: "From the menu bar, Conduck sends to this Mac's default AI — and this Mac can't reach that one. Your other AIs still work; pick one of them as the default."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
         /// Names the OUTCOME, like every other button on these surfaces
         /// ("Connect Your AI"), rather than the door it opens. The destination is
         /// the same Personal AI screen; the act there is choosing, not connecting.
-        static let button = LocalizedStringResource(
+        static var button: LocalizedStringResource { LocalizedStringResource(
             "unconfigured.defaultNeedsSetup.button",
             defaultValue: "Choose Default AI"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
     }
 }
 

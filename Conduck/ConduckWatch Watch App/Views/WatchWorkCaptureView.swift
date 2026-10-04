@@ -132,7 +132,7 @@ struct WatchWorkCaptureView: View {
             Text(String(localized: LocalizedStringResource(
                 "watch.work.capture.starting",
                 defaultValue: "Starting…"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -155,7 +155,7 @@ struct WatchWorkCaptureView: View {
                 Text(String(localized: LocalizedStringResource(
                     "watch.work.capture.timeLeft",
                     defaultValue: "1 min left"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .font(.caption2)
                 .foregroundStyle(.orange)
                 .transition(.opacity)
@@ -168,7 +168,7 @@ struct WatchWorkCaptureView: View {
                 Text(String(localized: LocalizedStringResource(
                     "watch.work.capture.stop",
                     defaultValue: "Tap to Stop"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 .font(.caption)
             }
             .buttonStyle(.bordered)
@@ -184,7 +184,7 @@ struct WatchWorkCaptureView: View {
             Text(String(localized: LocalizedStringResource(
                 "watch.work.capture.saving",
                 defaultValue: "Saving to Work…"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -293,7 +293,7 @@ struct WatchWorkCaptureView: View {
         .accessibilityLabel(Text(String(localized: LocalizedStringResource(
             "watch.work.capture.cancel",
             defaultValue: "Cancel"
-        ))))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))))
     }
 
     // MARK: - Haptics
@@ -310,10 +310,10 @@ struct WatchWorkCaptureView: View {
         ])
     }
 
-    private static let screenTitle = String(localized: LocalizedStringResource(
+    private static var screenTitle: String { String(localized: LocalizedStringResource(
         "watch.work.capture.navigationTitle",
         defaultValue: "Add to Work"
-    ))
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) }
 
     /// What the single button on an end-of-capture screen does.
     ///
@@ -380,12 +380,12 @@ struct WatchWorkCaptureView: View {
     static func buttonLabel(showingRecorderError: Bool, canRetry: Bool) -> String {
         switch messageAction(showingRecorderError: showingRecorderError, canRetry: canRetry) {
         case .retry:
-            return String(localized: "Try Again")  // xcstrings
+            return String(localized: "Try Again", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings
         case .done, .dismissErrorThenDone:
             return String(localized: LocalizedStringResource(
                 "watch.work.capture.done",
                 defaultValue: "Done"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 }
@@ -405,17 +405,17 @@ nonisolated enum WatchWorkCaptureCopy {
             return String(localized: LocalizedStringResource(
                 "watch.work.capture.saved",
                 defaultValue: "Saved to Work."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .deferredToPhone:
             return String(localized: LocalizedStringResource(
                 "watch.work.capture.deferred",
                 defaultValue: "Saved on your watch. It reaches Work when your iPhone is nearby."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .savedWordsOnly:
             return String(localized: LocalizedStringResource(
                 "watch.work.capture.savedWordsOnly",
                 defaultValue: "Saved the words to Work. Update Conduck on your iPhone to keep recordings."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .savedWithoutWords:
             // The mirror of the line above. The iPhone has the recording and
             // could not turn it into words, so it is holding the clip in its
@@ -425,7 +425,7 @@ nonisolated enum WatchWorkCaptureCopy {
             return String(localized: LocalizedStringResource(
                 "watch.work.capture.savedWithoutWords",
                 defaultValue: "Kept on your iPhone. Nothing reaches Work until the words land."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .refused(let reason):
             return reason
         }

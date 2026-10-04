@@ -80,6 +80,6 @@ enum AttachmentChipStyle {
 
     /// Human-readable byte size (e.g. "12 KB") via `ByteCountFormatter`.
     static func formattedSize(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        AppLocalization.byteCount(Int64(bytes), style: .file)
     }
 }

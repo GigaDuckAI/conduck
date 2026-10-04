@@ -159,29 +159,29 @@ struct WorkDeskBriefView: View {
                 return success
             }
         }
-        .alert(Text(LocalizedStringResource("workdesk.brief.discardTitle", defaultValue: "Discard unsaved changes?")), isPresented: $showingDiscardConfirmation) {
+        .alert(Text(LocalizedStringResource("workdesk.brief.discardTitle", defaultValue: "Discard unsaved changes?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)), isPresented: $showingDiscardConfirmation) {
             Button(role: .cancel) {} label: {
-                Text(LocalizedStringResource("workdesk.brief.keepEditing", defaultValue: "Keep editing"))
+                Text(LocalizedStringResource("workdesk.brief.keepEditing", defaultValue: "Keep editing", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             Button(role: .destructive) {
                 guard draft.discardUnsavedChanges() else { return }
                 onEndEditing()
                 dismiss()
             } label: {
-                Text(LocalizedStringResource("workdesk.brief.discard", defaultValue: "Discard changes"))
+                Text(LocalizedStringResource("workdesk.brief.discard", defaultValue: "Discard changes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         } message: {
-            Text(LocalizedStringResource("workdesk.brief.discardMessage", defaultValue: "The changes in this window will be lost. Your saved project and materials will stay in Work."))
+            Text(LocalizedStringResource("workdesk.brief.discardMessage", defaultValue: "The changes in this window will be lost. Your saved project and materials will stay in Work.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         .alert(
             conflictConfirmation?.replace == true
-                ? Text(LocalizedStringResource("workdesk.draft.replaceTitle", defaultValue: "Use this request instead?"))
-                : Text(LocalizedStringResource("workdesk.draft.reloadTitle", defaultValue: "Load the saved request?")),
+                ? Text(LocalizedStringResource("workdesk.draft.replaceTitle", defaultValue: "Use this request instead?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
+                : Text(LocalizedStringResource("workdesk.draft.reloadTitle", defaultValue: "Load the saved request?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             isPresented: $showsConflictConfirmation,
             presenting: conflictConfirmation
         ) { confirmation in
             Button(role: .cancel) {} label: {
-                Text(LocalizedStringResource("workdesk.brief.keepEditing", defaultValue: "Keep editing"))
+                Text(LocalizedStringResource("workdesk.brief.keepEditing", defaultValue: "Keep editing", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             Button(role: .destructive) {
                 guard draft.isCurrentPresentation(presentationID), !busy else { return }
@@ -192,31 +192,31 @@ struct WorkDeskBriefView: View {
                 }
             } label: {
                 Text(confirmation.replace
-                     ? LocalizedStringResource("workdesk.draft.useThis", defaultValue: "Use this request")
-                     : LocalizedStringResource("workdesk.draft.loadSaved", defaultValue: "Load saved request"))
+                     ? LocalizedStringResource("workdesk.draft.useThis", defaultValue: "Use this request", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                     : LocalizedStringResource("workdesk.draft.loadSaved", defaultValue: "Load saved request", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         } message: { confirmation in
             Text(confirmation.replace
-                 ? LocalizedStringResource("workdesk.draft.replaceMessage", defaultValue: "This replaces the saved request shown in the composer with the task and material choices in this window.")
-                 : LocalizedStringResource("workdesk.draft.reloadMessage", defaultValue: "This discards the task and material changes in this window and loads the saved request shown in the composer."))
+                 ? LocalizedStringResource("workdesk.draft.replaceMessage", defaultValue: "This replaces the saved request shown in the composer with the task and material choices in this window.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                 : LocalizedStringResource("workdesk.draft.reloadMessage", defaultValue: "This discards the task and material changes in this window and loads the saved request shown in the composer.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         .alert(
-            Text(LocalizedStringResource("workdesk.draft.anotherAfterInterruptionTitle", defaultValue: "Prepare another conversation?")),
+            Text(LocalizedStringResource("workdesk.draft.anotherAfterInterruptionTitle", defaultValue: "Prepare another conversation?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             isPresented: $showsInterruptedConfirmation,
             presenting: interruptedConfirmationID
         ) { conversationID in
             Button(role: .cancel) {} label: {
-                Text(LocalizedStringResource("common.cancel", defaultValue: "Cancel"))
+                Text(LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             Button {
                 guard draft.isCurrentPresentation(presentationID),
                       draft.interruptedHandoffID == conversationID, !busy else { return }
                 draft.reviewAfterInterruptedHandoff()
             } label: {
-                Text(LocalizedStringResource("workdesk.draft.useTaskAgain", defaultValue: "Use this task for another conversation"))
+                Text(LocalizedStringResource("workdesk.draft.useTaskAgain", defaultValue: "Use this task for another conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         } message: { _ in
-            Text(LocalizedStringResource("workdesk.draft.anotherAfterInterruptionMessage", defaultValue: "The previous send may already have reached your gateway. This keeps your task for a separate conversation. You will still review it and choose Send."))
+            Text(LocalizedStringResource("workdesk.draft.anotherAfterInterruptionMessage", defaultValue: "The previous send may already have reached your gateway. This keeps your task for a separate conversation. You will still review it and choose Send.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         .interactiveDismissDisabled()
         .task(id: presentationID) {
@@ -297,11 +297,11 @@ struct WorkDeskBriefView: View {
 
     private var headerHeading: LocalizedStringResource {
         if handoff.acceptedConversationID != nil {
-            return LocalizedStringResource("workdesk.conversation.accepted", defaultValue: "Conversation started")
+            return LocalizedStringResource("workdesk.conversation.accepted", defaultValue: "Conversation started", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return handoff.prepared == nil
-            ? LocalizedStringResource("workdesk.conversation.title", defaultValue: "New conversation")
-            : LocalizedStringResource("workdesk.conversation.reviewTitle", defaultValue: "Review conversation")
+            ? LocalizedStringResource("workdesk.conversation.title", defaultValue: "New conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("workdesk.conversation.reviewTitle", defaultValue: "Review conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     @ViewBuilder
@@ -319,7 +319,7 @@ struct WorkDeskBriefView: View {
                 Label(error, systemImage: "exclamationmark.circle")
                     .font(.callout).foregroundStyle(AppColors.textSecondary)
                 if !draft.persistedRequestWasRemoved, draft.interruptedHandoffID == nil {
-                    Button(LocalizedStringResource("workdesk.conversation.retrySaving", defaultValue: "Retry saving draft")) {
+                    Button(LocalizedStringResource("workdesk.conversation.retrySaving", defaultValue: "Retry saving draft", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         draft.persistChanges()
                     }
                     .inlineLinkButton()
@@ -330,7 +330,7 @@ struct WorkDeskBriefView: View {
         if !draft.persistedRequestWasRemoved, !requestNeedsRecovery,
            draft.saveError != nil || draft.persistenceError != nil {
             Button(role: .destructive) { showingDiscardConfirmation = true } label: {
-                Text(LocalizedStringResource("workdesk.brief.discard", defaultValue: "Discard changes"))
+                Text(LocalizedStringResource("workdesk.brief.discard", defaultValue: "Discard changes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
             .inlineLinkButton()
         }
@@ -339,15 +339,15 @@ struct WorkDeskBriefView: View {
     private func conflictRecovery(_ conflict: WorkDeskBriefDraftStore.Conflict) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label {
-                Text(LocalizedStringResource("workdesk.draft.conflict", defaultValue: "This project’s draft changed in another window. Your request is still here. Choose which draft to keep."))
+                Text(LocalizedStringResource("workdesk.draft.conflict", defaultValue: "This project’s draft changed in another window. Your request is still here. Choose which draft to keep.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } icon: { Image(systemName: "exclamationmark.circle") }
             .font(.callout)
             if let saved = conflict.current {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(LocalizedStringResource("workdesk.draft.savedRequest", defaultValue: "Saved request"))
+                    Text(LocalizedStringResource("workdesk.draft.savedRequest", defaultValue: "Saved request", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                     if saved.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(LocalizedStringResource("workdesk.draft.savedTaskEmpty", defaultValue: "No task entered."))
+                        Text(LocalizedStringResource("workdesk.draft.savedTaskEmpty", defaultValue: "No task entered.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.callout)
                     } else {
                         Text(verbatim: saved.task).font(.callout).textSelection(.enabled)
@@ -358,7 +358,7 @@ struct WorkDeskBriefView: View {
                     .font(.caption)
                     savedMaterialsPreview(saved)
                     if saved.pendingConversationID != nil {
-                        Text(LocalizedStringResource("workdesk.draft.savedSendPending", defaultValue: "A send was started for this request. Load it to check the conversation before preparing another."))
+                        Text(LocalizedStringResource("workdesk.draft.savedSendPending", defaultValue: "A send was started for this request. Load it to check the conversation before preparing another.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption)
                     }
                 }
@@ -366,18 +366,18 @@ struct WorkDeskBriefView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12))
             } else {
-                Text(LocalizedStringResource("workdesk.draft.savedRequestRetired", defaultValue: "The saved request was completed or removed in another window."))
+                Text(LocalizedStringResource("workdesk.draft.savedRequestRetired", defaultValue: "The saved request was completed or removed in another window.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.callout)
             }
             if conflict.canReplace {
-                Button(LocalizedStringResource("workdesk.draft.useThis", defaultValue: "Use this request")) {
+                Button(LocalizedStringResource("workdesk.draft.useThis", defaultValue: "Use this request", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     conflictConfirmation = .init(conflict: conflict, replace: true)
                     showsConflictConfirmation = true
                 }
                 .inlineLinkButton()
                 .accessibilityIdentifier("workdesk-draft-use-this")
             }
-            Button(LocalizedStringResource("workdesk.draft.loadSaved", defaultValue: "Load saved request")) {
+            Button(LocalizedStringResource("workdesk.draft.loadSaved", defaultValue: "Load saved request", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 conflictConfirmation = .init(conflict: conflict, replace: false)
                 showsConflictConfirmation = true
             }
@@ -417,37 +417,37 @@ struct WorkDeskBriefView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
                 if unavailableCount > 0 {
-                    Text(LocalizedStringResource("workdesk.draft.savedMaterialsUnavailable", defaultValue: "\(unavailableCount) selected materials are unavailable here."))
+                    Text(LocalizedStringResource("workdesk.draft.savedMaterialsUnavailable", defaultValue: "\(unavailableCount) selected materials are unavailable here.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption)
                 }
             }
             .padding(.top, 6)
         } label: {
-            Text(LocalizedStringResource("workdesk.draft.savedMaterialsCount", defaultValue: "Materials selected: \(includedIDs.count)"))
+            Text(LocalizedStringResource("workdesk.draft.savedMaterialsCount", defaultValue: "Materials selected: \(includedIDs.count)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption.weight(.medium))
         }
     }
 
     private func savedGatewayName(_ rawRef: String?) -> String {
         guard let rawRef else {
-            return String(localized: "workdesk.draft.noSavedGateway", defaultValue: "No gateway selected")
+            return String(localized: "workdesk.draft.noSavedGateway", defaultValue: "No gateway selected", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return handoff.gateways.first { $0.ref.rawString == rawRef }?.name
-            ?? String(localized: "workdesk.draft.unavailableSavedGateway", defaultValue: "Saved gateway unavailable on this device")
+            ?? String(localized: "workdesk.draft.unavailableSavedGateway", defaultValue: "Saved gateway unavailable on this device", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     private var interruptedHandoffRecovery: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label {
-                Text(LocalizedStringResource("workdesk.draft.interruptedTitle", defaultValue: "Check the previous conversation"))
+                Text(LocalizedStringResource("workdesk.draft.interruptedTitle", defaultValue: "Check the previous conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } icon: { Image(systemName: "clock.arrow.circlepath") }
             .font(.headline)
-            Text(LocalizedStringResource("workdesk.draft.interruptedMessage", defaultValue: "A send started before this draft closed. Check the saved conversation before preparing another."))
+            Text(LocalizedStringResource("workdesk.draft.interruptedMessage", defaultValue: "A send started before this draft closed. Check the saved conversation before preparing another.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.callout).foregroundStyle(AppColors.textSecondary)
             switch recoveryStatus {
             case .checking:
                 ProgressView {
-                    Text(LocalizedStringResource("workdesk.draft.checkingConversation", defaultValue: "Checking saved conversations…"))
+                    Text(LocalizedStringResource("workdesk.draft.checkingConversation", defaultValue: "Checking saved conversations…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
                 .controlSize(.small)
             case .recordedConversation(let conversationID):
@@ -460,15 +460,15 @@ struct WorkDeskBriefView: View {
                     onOpenConversation(conversationID)
                 } label: {
                     Label {
-                        Text(LocalizedStringResource("workdesk.draft.openExistingConversation", defaultValue: "Open existing conversation"))
+                        Text(LocalizedStringResource("workdesk.draft.openExistingConversation", defaultValue: "Open existing conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     } icon: { Image(systemName: "arrow.up.right") }
                 }
                 .inlineLinkButton()
                 .accessibilityIdentifier("workdesk-draft-open-existing")
             case .unresolved:
-                Text(LocalizedStringResource("workdesk.draft.conversationUnresolved", defaultValue: "No saved user message was found on this device. This does not confirm whether the gateway received the previous send."))
+                Text(LocalizedStringResource("workdesk.draft.conversationUnresolved", defaultValue: "No saved user message was found on this device. This does not confirm whether the gateway received the previous send.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.callout).foregroundStyle(AppColors.textSecondary)
-                Button(LocalizedStringResource("workdesk.draft.useTaskAgain", defaultValue: "Use this task for another conversation")) {
+                Button(LocalizedStringResource("workdesk.draft.useTaskAgain", defaultValue: "Use this task for another conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     interruptedConfirmationID = draft.interruptedHandoffID
                     showsInterruptedConfirmation = true
                 }
@@ -476,7 +476,7 @@ struct WorkDeskBriefView: View {
                 .accessibilityIdentifier("workdesk-draft-review-another")
                 retryConversationLookup
             case .failed:
-                Text(LocalizedStringResource("workdesk.draft.conversationLookupFailed", defaultValue: "Saved conversations couldn’t be checked. Try again before preparing another conversation."))
+                Text(LocalizedStringResource("workdesk.draft.conversationLookupFailed", defaultValue: "Saved conversations couldn’t be checked. Try again before preparing another conversation.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.callout).foregroundStyle(AppColors.textSecondary)
                 retryConversationLookup
             }
@@ -485,7 +485,7 @@ struct WorkDeskBriefView: View {
                     .font(.callout).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } label: {
-                Text(LocalizedStringResource("workdesk.conversation.reviewTask", defaultValue: "Your task"))
+                Text(LocalizedStringResource("workdesk.conversation.reviewTask", defaultValue: "Your task", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline.weight(.medium))
             }
         }
@@ -493,7 +493,7 @@ struct WorkDeskBriefView: View {
     }
 
     private var retryConversationLookup: some View {
-        Button(LocalizedStringResource("workdesk.draft.checkConversationAgain", defaultValue: "Check again")) {
+        Button(LocalizedStringResource("workdesk.draft.checkConversationAgain", defaultValue: "Check again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
             Task { await refreshInterruptedHandoff() }
         }
         .inlineLinkButton()
@@ -532,13 +532,13 @@ struct WorkDeskBriefView: View {
 
     private var instructionEditor: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(LocalizedStringResource("workdesk.conversation.task", defaultValue: "What would you like to do?"))
+            Text(LocalizedStringResource("workdesk.conversation.task", defaultValue: "What would you like to do?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.headline)
             TextField(
                 text: $draft.brief,
                 axis: .vertical,
                 label: {
-                    Text(LocalizedStringResource("workdesk.conversation.task.placeholder", defaultValue: "Describe the task and the result you want from this conversation…"))
+                    Text(LocalizedStringResource("workdesk.conversation.task.placeholder", defaultValue: "Describe the task and the result you want from this conversation…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             )
             .textFieldStyle(.plain)
@@ -565,7 +565,7 @@ struct WorkDeskBriefView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 6)
         } label: {
-            Text(LocalizedStringResource("workdesk.conversation.context.included", defaultValue: "Project context included"))
+            Text(LocalizedStringResource("workdesk.conversation.context.included", defaultValue: "Project context included", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline.weight(.medium))
         }
         .foregroundStyle(AppColors.textSecondary)
@@ -577,13 +577,13 @@ struct WorkDeskBriefView: View {
             DisclosureGroup(isExpanded: showsMaterials) {
                 VStack(alignment: .leading, spacing: 8) {
                     if requestMaterials.isEmpty {
-                        Text(LocalizedStringResource("workdesk.conversation.materials.empty", defaultValue: "No materials yet. You can start with a task alone."))
+                        Text(LocalizedStringResource("workdesk.conversation.materials.empty", defaultValue: "No materials yet. You can start with a task alone.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.callout).foregroundStyle(AppColors.textSecondary)
                     }
                     ForEach(requestMaterials) { material in materialRow(material) }
                     materialsFromElsewhere
                     if included.count < requestMaterials.count {
-                        Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials will not be sent. Their project locations stay the same."))
+                        Text(LocalizedStringResource("workdesk.brief.excluded", defaultValue: "Unchecked materials will not be sent. Their project locations stay the same.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption).foregroundStyle(AppColors.textSecondary)
                             .padding(.top, 4)
                     }
@@ -618,9 +618,9 @@ struct WorkDeskBriefView: View {
             }
             if draft.hasMissingSelectedMaterials(in: requestMaterials) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(LocalizedStringResource("workdesk.conversation.missingSelection", defaultValue: "Some selected materials were removed or moved. Leave them out to continue."))
+                    Text(LocalizedStringResource("workdesk.conversation.missingSelection", defaultValue: "Some selected materials were removed or moved. Leave them out to continue.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.callout).foregroundStyle(AppColors.textSecondary)
-                    Button(LocalizedStringResource("workdesk.conversation.leaveOutMissing", defaultValue: "Leave out missing materials")) {
+                    Button(LocalizedStringResource("workdesk.conversation.leaveOutMissing", defaultValue: "Leave out missing materials", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         draft.leaveOutMissingMaterials(in: requestMaterials)
                     }.inlineLinkButton()
                 }
@@ -629,16 +629,16 @@ struct WorkDeskBriefView: View {
     }
 
     private var materialsHeading: some View {
-        Text(LocalizedStringResource("workdesk.conversation.materials.heading", defaultValue: "Materials"))
+        Text(LocalizedStringResource("workdesk.conversation.materials.heading", defaultValue: "Materials", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.headline).foregroundStyle(AppColors.textPrimary)
     }
 
     private var materialsCount: some View {
         Group {
             if included.count == requestMaterials.count {
-                Text(LocalizedStringResource("workdesk.conversation.materials.count", defaultValue: "\(included.count) included"))
+                Text(LocalizedStringResource("workdesk.conversation.materials.count", defaultValue: "\(included.count) included", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } else {
-                Text(LocalizedStringResource("workdesk.conversation.materials.partialCount", defaultValue: "\(included.count) of \(requestMaterials.count) included"))
+                Text(LocalizedStringResource("workdesk.conversation.materials.partialCount", defaultValue: "\(included.count) of \(requestMaterials.count) included", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
         .font(.caption.monospacedDigit())
@@ -653,7 +653,7 @@ struct WorkDeskBriefView: View {
                 showsMaterialPicker = true
             } label: {
                 Label {
-                    Text(LocalizedStringResource("workdesk.conversation.useElsewhere", defaultValue: "Use materials from elsewhere…"))
+                    Text(LocalizedStringResource("workdesk.conversation.useElsewhere", defaultValue: "Use materials from elsewhere…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 } icon: { Image(systemName: "plus") }
                 .font(.callout)
                 .padding(.vertical, 10)
@@ -678,7 +678,7 @@ struct WorkDeskBriefView: View {
                     Text(material.name).font(.callout.weight(.medium)).foregroundStyle(AppColors.textPrimary).lineLimit(2)
                     if !materials.contains(where: { $0.id == material.id }) {
                         Label {
-                            Text(verbatim: materialProjectNames[material.id] ?? String(localized: "workdesk.material.unfiled", defaultValue: "No project"))
+                            Text(verbatim: materialProjectNames[material.id] ?? String(localized: "workdesk.material.unfiled", defaultValue: "No project", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                         } icon: { Image(systemName: "folder") }
                             .font(.caption).foregroundStyle(AppColors.textSecondary)
                     }
@@ -687,13 +687,13 @@ struct WorkDeskBriefView: View {
                             .font(.caption).foregroundStyle(AppColors.textSecondary).lineLimit(2)
                     }
                     if selected, material.companion != nil, includedCard?.companion == nil {
-                        Text(LocalizedStringResource("workdesk.conversation.newCompanionExcluded", defaultValue: "New attached material left out. Uncheck and select this card again to include it."))
+                        Text(LocalizedStringResource("workdesk.conversation.newCompanionExcluded", defaultValue: "New attached material left out. Uncheck and select this card again to include it.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption).foregroundStyle(AppColors.textSecondary)
                     }
                     ForEach(WorkDeskHandoffPolicy.expanded([includedCard ?? material])) { part in
                         if let notes = part.annotation, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes"))
+                                Text(LocalizedStringResource("workdesk.material.notes.title", defaultValue: "Your notes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                     .font(.caption.weight(.semibold))
                                 Text(verbatim: notes).font(.caption).lineLimit(3)
                             }
@@ -715,7 +715,7 @@ struct WorkDeskBriefView: View {
             .background(AppColors.cardBackgroundElevated, in: RoundedRectangle(cornerRadius: 12))
         }
         .choiceCardButton(cornerRadius: 12)
-        .accessibilityValue(Text(selected ? LocalizedStringResource("workdesk.brief.included", defaultValue: "Included") : LocalizedStringResource("workdesk.brief.leftOut", defaultValue: "Left out")))
+        .accessibilityValue(Text(selected ? LocalizedStringResource("workdesk.brief.included", defaultValue: "Included", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) : LocalizedStringResource("workdesk.brief.leftOut", defaultValue: "Left out", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     private func materialBlockingReason(_ material: WorkboardMaterialSnapshot) -> String? {
@@ -726,10 +726,10 @@ struct WorkDeskBriefView: View {
     @ViewBuilder
     private var gatewayNotice: some View {
         if handoff.hasLoadedGateways, handoff.gateways.isEmpty {
-            Text(LocalizedStringResource("workdesk.conversation.gateway.none", defaultValue: "No gateway is available on this device. Your task will stay here when you close. Connect a gateway in Settings → Personal AI."))
+            Text(LocalizedStringResource("workdesk.conversation.gateway.none", defaultValue: "No gateway is available on this device. Your task will stay here when you close. Connect a gateway in Settings → Personal AI.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.callout).foregroundStyle(AppColors.textSecondary)
         } else if handoff.hasLoadedGateways, draft.selectedGateway != nil, gateway == nil {
-            Text(LocalizedStringResource("workdesk.brief.savedUnavailable", defaultValue: "This gateway is unavailable on this device. Choose another to continue."))
+            Text(LocalizedStringResource("workdesk.brief.savedUnavailable", defaultValue: "This gateway is unavailable on this device. Choose another to continue.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.callout).foregroundStyle(AppColors.textSecondary)
         }
     }
@@ -737,7 +737,7 @@ struct WorkDeskBriefView: View {
     private func review(_ packet: WorkDeskPreparedHandoff) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(LocalizedStringResource("workdesk.conversation.reviewTask", defaultValue: "Your task"))
+                Text(LocalizedStringResource("workdesk.conversation.reviewTask", defaultValue: "Your task", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.headline)
                 Text(verbatim: packet.task)
                     .font(.body).textSelection(.enabled)
@@ -751,7 +751,7 @@ struct WorkDeskBriefView: View {
                     HStack {
                         materialsHeading
                         Spacer(minLength: 8)
-                        Text(LocalizedStringResource("workdesk.conversation.materials.count", defaultValue: "\(packet.materials.count) included"))
+                        Text(LocalizedStringResource("workdesk.conversation.materials.count", defaultValue: "\(packet.materials.count) included", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.monospacedDigit()).foregroundStyle(AppColors.textSecondary)
                     }
                     ForEach(packet.materials) { material in
@@ -780,7 +780,7 @@ struct WorkDeskBriefView: View {
                 }
                 if !packet.attachmentNames.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(LocalizedStringResource("workdesk.brief.attachedFiles", defaultValue: "Attached files"))
+                        Text(LocalizedStringResource("workdesk.brief.attachedFiles", defaultValue: "Attached files", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline.weight(.medium))
                         ForEach(Array(packet.attachmentNames.enumerated()), id: \.offset) { _, name in
                             Label(name, systemImage: "paperclip").font(.callout)
@@ -789,11 +789,11 @@ struct WorkDeskBriefView: View {
                     .padding(.top, 8)
                 }
             } label: {
-                Text(LocalizedStringResource("workdesk.conversation.exactMessage", defaultValue: "Full outgoing message"))
+                Text(LocalizedStringResource("workdesk.conversation.exactMessage", defaultValue: "Full outgoing message", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline.weight(.medium))
             }
             .accessibilityIdentifier("workdesk-handoff-full-message")
-            Text(LocalizedStringResource("workdesk.conversation.sendExplanation", defaultValue: "Send starts a new conversation with the gateway above."))
+            Text(LocalizedStringResource("workdesk.conversation.sendExplanation", defaultValue: "Send starts a new conversation with the gateway above.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption).foregroundStyle(AppColors.textSecondary)
         }
     }
@@ -801,11 +801,11 @@ struct WorkDeskBriefView: View {
     private var acceptedHandoff: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label {
-                Text(LocalizedStringResource("workdesk.conversation.accepted", defaultValue: "Conversation started"))
+                Text(LocalizedStringResource("workdesk.conversation.accepted", defaultValue: "Conversation started", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             } icon: { Image(systemName: "checkmark.circle") }
             .font(.title2.weight(.bold)).foregroundStyle(AppColors.brandAmber)
             Text(title).font(.title.weight(.bold))
-            Text(LocalizedStringResource("workdesk.brief.acceptedMessage", defaultValue: "Open the conversation to follow its progress or continue working with your AI. Your project and materials are still here."))
+            Text(LocalizedStringResource("workdesk.brief.acceptedMessage", defaultValue: "Open the conversation to follow its progress or continue working with your AI. Your project and materials are still here.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.callout).foregroundStyle(AppColors.textSecondary)
         }
     }
@@ -819,7 +819,7 @@ struct WorkDeskBriefView: View {
                     draft.startAnotherConversation()
                 } label: {
                     footerLabel(primary: false) {
-                        Text(LocalizedStringResource("workdesk.conversation.another", defaultValue: "New conversation"))
+                        Text(LocalizedStringResource("workdesk.conversation.another", defaultValue: "New conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }
                 }
                 .choiceCardButton(cornerRadius: 22)
@@ -832,7 +832,7 @@ struct WorkDeskBriefView: View {
                 } label: {
                     footerLabel(primary: true) {
                         Label {
-                            Text(LocalizedStringResource("workdesk.brief.openChat", defaultValue: "Open chat"))
+                            Text(LocalizedStringResource("workdesk.brief.openChat", defaultValue: "Open chat", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         } icon: { Image(systemName: "arrow.up.right") }
                     }
                 }
@@ -844,7 +844,7 @@ struct WorkDeskBriefView: View {
                     handoff.discardPreparation()
                 } label: {
                     footerLabel(primary: false) {
-                        Text(LocalizedStringResource("workdesk.conversation.reviewBack", defaultValue: "Back"))
+                        Text(LocalizedStringResource("workdesk.conversation.reviewBack", defaultValue: "Back", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }
                 }
                 .choiceCardButton(cornerRadius: 22)
@@ -865,7 +865,7 @@ struct WorkDeskBriefView: View {
                     footerLabel(primary: true) {
                         HStack(spacing: 8) {
                             if handoff.isSending { ProgressView().controlSize(.small) }
-                            Text(String(localized: "workdesk.brief.sendTo", defaultValue: "Send to \(packet.gatewayName)"))
+                            Text(String(localized: "workdesk.brief.sendTo", defaultValue: "Send to \(packet.gatewayName)", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
                                 .fixedSize(horizontal: false, vertical: true)
                             Image(systemName: "arrow.up.right")
                         }
@@ -879,7 +879,7 @@ struct WorkDeskBriefView: View {
                     Task { await close() }
                 } label: {
                     footerLabel(primary: false) {
-                        Text(LocalizedStringResource("common.close", defaultValue: "Close"))
+                        Text(LocalizedStringResource("common.close", defaultValue: "Close", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }
                 }
                 .choiceCardButton(cornerRadius: 22)
@@ -899,7 +899,7 @@ struct WorkDeskBriefView: View {
                     footerLabel(primary: true) {
                         HStack(spacing: 8) {
                             if busy { ProgressView().controlSize(.small) }
-                            Text(LocalizedStringResource("workdesk.conversation.review", defaultValue: "Review"))
+                            Text(LocalizedStringResource("workdesk.conversation.review", defaultValue: "Review", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             Image(systemName: "arrow.right")
                         }
                     }
@@ -954,7 +954,7 @@ struct WorkDeskBriefView: View {
         if success {
             draft.markSaved(projectContext: savedContext, selectedGateway: savedGateway)
         } else {
-            draft.saveError = String(localized: "workdesk.conversation.saveFailed", defaultValue: "Your project settings could not be saved. Your task is still here. Keep this window open and try again.")
+            draft.saveError = String(localized: "workdesk.conversation.saveFailed", defaultValue: "Your project settings could not be saved. Your task is still here. Keep this window open and try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return success && draft.persistChanges()
     }

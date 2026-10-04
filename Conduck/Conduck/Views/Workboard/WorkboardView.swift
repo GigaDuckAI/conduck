@@ -82,11 +82,11 @@ struct WorkDeskSidebarToolbarButton: View {
 
     private var label: LocalizedStringResource {
         if !workspace.presentsSidebarInline {
-            return LocalizedStringResource("workdesk.projects", defaultValue: "Projects")
+            return LocalizedStringResource("workdesk.projects", defaultValue: "Projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return workspace.showsSidebar
-            ? LocalizedStringResource("workdesk.sidebar.hide", defaultValue: "Hide project sidebar")
-            : LocalizedStringResource("workdesk.sidebar.show", defaultValue: "Show project sidebar")
+            ? LocalizedStringResource("workdesk.sidebar.hide", defaultValue: "Hide project sidebar", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("workdesk.sidebar.show", defaultValue: "Show project sidebar", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     var body: some View {
@@ -394,7 +394,7 @@ struct WorkboardPresentationModifier: ViewModifier {
                     dismissButton: .default(Text(LocalizedStringResource(
                         "common.ok",
                         defaultValue: "OK"
-                    )))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 )
             }
     }
@@ -479,10 +479,10 @@ struct WorkboardDetailColumn: View {
 
     /// The desk is titled by the workspace it is, never by the row behind it:
     /// the desk record carries no title or objective for anything to display.
-    private static let deskTitle = LocalizedStringResource(
+    private static var deskTitle: LocalizedStringResource { LocalizedStringResource(
         "workboard.title",
         defaultValue: "Work"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     @ViewBuilder
     var body: some View {
@@ -507,7 +507,7 @@ struct WorkboardDetailColumn: View {
                 Text(LocalizedStringResource(
                     "workboard.loading",
                     defaultValue: "Opening your private work…"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
             }
@@ -519,15 +519,15 @@ struct WorkboardDetailColumn: View {
                 title: LocalizedStringResource(
                     "workboard.load.failed.title",
                     defaultValue: "Work couldn’t open"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 message: LocalizedStringResource(
                     "workboard.load.failed.message",
                     defaultValue: "Your desk stays private and unchanged. Try opening it again."
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 actionTitle: LocalizedStringResource(
                     "workboard.load.retry",
                     defaultValue: "Try Again"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             ) {
                 viewModel.loadError = nil
                 Task { await viewModel.load() }

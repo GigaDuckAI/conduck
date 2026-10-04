@@ -43,17 +43,17 @@ enum WorkboardSyncBannerPolicy {
             return LocalizedStringResource(
                 "workboard.sync.banner.noAccount",
                 defaultValue: "iCloud is signed out — your cards won’t sync across your devices."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .restricted:
             return LocalizedStringResource(
                 "workboard.sync.banner.restricted",
                 defaultValue: "iCloud is restricted on this device — your cards can’t sync."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .quotaExceeded:
             return LocalizedStringResource(
                 "workboard.sync.banner.quotaExceeded",
                 defaultValue: "Your iCloud storage is full — new cards can’t sync to your other devices."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }
@@ -81,7 +81,7 @@ struct WorkboardSyncBanner: View {
                 Button {
                     openICloudSystemSettings()
                 } label: {
-                    Text(LocalizedStringResource("sync.icloud.banner.openSettings", defaultValue: "Open Settings"))
+                    Text(LocalizedStringResource("sync.icloud.banner.openSettings", defaultValue: "Open Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
@@ -98,7 +98,7 @@ struct WorkboardSyncBanner: View {
                     .foregroundStyle(AppColors.textTertiary)
             }
             .pointerIconButton()
-            .accessibilityLabel(Text(LocalizedStringResource("sync.icloud.banner.dismiss", defaultValue: "Dismiss")))
+            .accessibilityLabel(Text(LocalizedStringResource("sync.icloud.banner.dismiss", defaultValue: "Dismiss", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
         .padding(16)
         .glassCardBackground(borderColor: AppColors.sunsetOrange.opacity(0.4))

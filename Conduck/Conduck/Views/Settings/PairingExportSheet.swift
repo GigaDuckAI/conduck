@@ -132,14 +132,14 @@ struct PairingExportSheet: View {
             .navigationTitle(Text(LocalizedStringResource(
                 "settings.pairing.export.title",
                 defaultValue: "Gateway setup code"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(role: .cancel) { dismiss() } label: {
-                        Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
+                        Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     }
                 }
             }
@@ -147,7 +147,7 @@ struct PairingExportSheet: View {
                 Text(LocalizedStringResource(
                     "settings.pairing.export.noLock.title",
                     defaultValue: "This device has no lock"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 isPresented: $showingNoLockAlert
             ) {
                 Button(role: .destructive) {
@@ -156,16 +156,16 @@ struct PairingExportSheet: View {
                     Text(LocalizedStringResource(
                         "settings.pairing.export.noLock.confirm",
                         defaultValue: "Show code anyway"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
                 Button(role: .cancel) { dismiss() } label: {
-                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel"))
+                    Text(LocalizedStringResource("settings.editor.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             } message: {
                 Text(LocalizedStringResource(
                     "settings.pairing.export.noLock.message",
                     defaultValue: "Conduck couldn't ask for Face ID, Touch ID, or a passcode, so anyone holding this device can reveal a code that grants full access to your gateway. Set a device passcode for real protection."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
         #if os(macOS)
@@ -211,7 +211,7 @@ struct PairingExportSheet: View {
                 Text(LocalizedStringResource(
                     "settings.pairing.export.authenticating",
                     defaultValue: "Confirming it's you…"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -226,7 +226,7 @@ struct PairingExportSheet: View {
             Text(LocalizedStringResource(
                 "settings.pairing.export.preparing",
                 defaultValue: "Preparing your setup code…"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textSecondary)
                 .padding(.vertical, 4)
@@ -256,7 +256,7 @@ struct PairingExportSheet: View {
                 Text(LocalizedStringResource(
                     "settings.pairing.export.warning",
                     defaultValue: "This setup code is a reusable password. It contains your gateway token — anyone who scans or photographs it gets full access to this gateway, and to its file server if this code includes one. A photo or copy keeps working until you rotate the token on the gateway. If a device is lost, rotate the gateway token and the file-server password on your server, then re-pair your remaining devices."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.footnote)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -266,7 +266,7 @@ struct PairingExportSheet: View {
         } header: {
             Text(String(
                 format: String(localized: "settings.pairing.export.forGateway",
-                               defaultValue: "For %@"),
+                               defaultValue: "For %@", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 viewModel.displayName(for: ref)
             ))
         }
@@ -327,7 +327,7 @@ struct PairingExportSheet: View {
             let consequence = String(
                 localized: "settings.pairing.export.preflightWarning.certUntrusted",
                 defaultValue: "Every device that scans this code will refuse the same certificate. You can still show it."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             return "\(CertificateTrustCopy.untrustedRefusalWithRemedy) \(consequence)"
         case .certificateMismatch:
             // No "you can still show it" tail. On an untrusted chain the code
@@ -348,7 +348,7 @@ struct PairingExportSheet: View {
             return String(
                 localized: "settings.pairing.export.preflightWarning",
                 defaultValue: "Your gateway didn't answer just now, so this code may not work yet — your device may simply be offline. You can still show it."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -359,7 +359,7 @@ struct PairingExportSheet: View {
                 Text(LocalizedStringResource(
                     "settings.pairing.export.scanHint",
                     defaultValue: "On your new device, open Conduck and go to Settings → Personal AI → Import setup code, then scan this."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                     .multilineTextAlignment(.center)
@@ -405,7 +405,7 @@ struct PairingExportSheet: View {
                 .accessibilityLabel(Text(LocalizedStringResource(
                     "settings.pairing.export.qr.a11y",
                     defaultValue: "Gateway setup QR code"
-                )))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         } else {
             ProgressView()
                 .frame(width: 240, height: 240)
@@ -421,7 +421,7 @@ struct PairingExportSheet: View {
             Text(LocalizedStringResource(
                 "settings.pairing.export.captured",
                 defaultValue: "Hidden while your screen is being recorded."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
                 .multilineTextAlignment(.center)
@@ -443,7 +443,7 @@ struct PairingExportSheet: View {
                     Text(LocalizedStringResource(
                         "settings.pairing.export.captured",
                         defaultValue: "Hidden while your screen is being recorded."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption)
                         .foregroundStyle(AppColors.textTertiary)
                 } else {
@@ -460,7 +460,7 @@ struct PairingExportSheet: View {
                         LocalizedStringResource(
                             "settings.pairing.export.showText",
                             defaultValue: "Show text code"
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "text.alignleft"
                     )
                     .font(.subheadline.weight(.semibold))
@@ -476,7 +476,7 @@ struct PairingExportSheet: View {
             Text(LocalizedStringResource(
                 "settings.pairing.export.textFooter",
                 defaultValue: "Paste this into Conduck on a Mac, or on any device where scanning won't work."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -494,8 +494,8 @@ struct PairingExportSheet: View {
             } label: {
                 Label(
                     copied
-                        ? LocalizedStringResource("settings.pairing.export.copied", defaultValue: "Copied")
-                        : LocalizedStringResource("settings.pairing.export.copy", defaultValue: "Copy code"),
+                        ? LocalizedStringResource("settings.pairing.export.copied", defaultValue: "Copied", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("settings.pairing.export.copy", defaultValue: "Copy code", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: copied ? "checkmark" : "doc.on.doc"
                 )
                 .font(.subheadline.weight(.semibold))
@@ -530,7 +530,7 @@ struct PairingExportSheet: View {
                         LocalizedStringResource(
                             "settings.pairing.export.showAgain",
                             defaultValue: "Show code"
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "qrcode"
                     )
                     .font(.subheadline.weight(.semibold))
@@ -552,12 +552,12 @@ struct PairingExportSheet: View {
             return LocalizedStringResource(
                 "settings.pairing.export.couldNotPrepare.title",
                 defaultValue: "Couldn't prepare the code"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         default:
             return LocalizedStringResource(
                 "settings.pairing.export.hidden.title",
                 defaultValue: "Code hidden"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -567,27 +567,27 @@ struct PairingExportSheet: View {
             return LocalizedStringResource(
                 "settings.pairing.export.hidden.expired",
                 defaultValue: "The code was hidden for safety. Show it again when you're ready to scan."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .backgrounded:
             return LocalizedStringResource(
                 "settings.pairing.export.hidden.backgrounded",
                 defaultValue: "The code was hidden when Conduck left the screen. Show it again to keep scanning."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .authFailed:
             return LocalizedStringResource(
                 "settings.pairing.export.hidden.authFailed",
                 defaultValue: "Conduck couldn't confirm it's you. Try again to reveal the code."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .couldNotPrepare:
             return prepareFailure == .tokenUnavailable
                 ? LocalizedStringResource(
                     "settings.pairing.export.couldNotPrepare.token",
                     defaultValue: "Conduck couldn't read this gateway's token — unlock your device and try again, or re-enter the token in the gateway's settings."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 : LocalizedStringResource(
                     "settings.pairing.export.couldNotPrepare.generic",
                     defaultValue: "Conduck couldn't build a setup code for this gateway. Check it's fully configured, then try again."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -606,7 +606,7 @@ struct PairingExportSheet: View {
         if context.canEvaluatePolicy(policy, error: &authError) {
             phase = .authenticating
             let reason = String(localized: "settings.pairing.export.auth.reason",
-                                defaultValue: "Reveal your gateway setup code")
+                                defaultValue: "Reveal your gateway setup code", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             revealTask = Task {
                 let ok = await evaluate(context, policy: policy, reason: reason)
                 if ok {

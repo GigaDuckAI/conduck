@@ -375,11 +375,23 @@ They are written down on the same principle as the capture race noted further be
 
 ### Everything persistent goes through one seam
 
-Configuration and secret persistence stay behind injectable interfaces. Production uses real storage; tests use isolated substitutes.
+Configuration and secret persistence use injectable interfaces, keeping production
+storage separate from test doubles.
 
-**Why:** some of that state syncs. A test that writes a gateway URL without the seam does not write to a sandbox — it writes to the developer's real iCloud account and the value appears on their own phone and watch minutes later. The seam is the only thing standing between the test suite and the maintainer's devices, and it holds only while every call site respects it, so a script checks it on every CI run.
+Some state syncs: a test that bypasses these interfaces can write into the
+maintainer's iCloud account and change their phone or Watch. A source guard
+prevents that boundary from being bypassed.
 
-Two carve-outs are deliberate and the script encodes both. Plain device-local defaults are a legitimate separate store and are outside the seam. And the App-Group *container directory* is outside it too — opening that folder still reaches the real shared container — so the handful of files that do are listed by name in the script, which means a new one fails the build instead of joining them quietly.
+Device-local defaults and the App Group container directory are deliberate
+exceptions. Only named files may open the shared container; a source guard
+rejects new callers. That directory never syncs through iCloud.
+
+### Interface language belongs to each device
+
+Each iPhone, iPad and Mac keeps its own interface language. Watch and CarPlay
+inherit the paired iPhone's choice. This preference never syncs through iCloud
+or changes speech-recognition preferences or conversation content. Apple owns
+the language of system permission controls and Siri requests.
 
 ### Configuration and secrets have different privacy boundaries
 

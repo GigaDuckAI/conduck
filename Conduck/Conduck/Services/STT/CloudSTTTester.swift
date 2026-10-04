@@ -299,29 +299,29 @@ final class CloudSTTTester {
             return String(localized: LocalizedStringResource(
                 "settings.voice.cloudTest.error.auth",
                 defaultValue: "The key was rejected. Check it in Provider Access."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .sttQuotaExceeded:
             return String(localized: LocalizedStringResource(
                 "settings.voice.cloudTest.error.quota",
                 defaultValue: "You're out of credits with this provider."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .sttProviderUnreachable, .noInternetConnection, .networkError, .requestTimeout, .sttServerError, .sttTooManyRequests:
             return String(localized: LocalizedStringResource(
                 "settings.voice.cloudTest.error.unreachable",
                 defaultValue: "Couldn't reach \(providerName). Check your connection and try again."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .audioTooLarge:
             return String(localized: LocalizedStringResource(
                 "settings.voice.cloudTest.error.tooLong",
                 defaultValue: "That clip was too long. Try a shorter test."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .noSpeechDetected:
             return noSpeechMessage
         case .audioProcessingFailed, .audioInvalid, .sttDecodingFailure:
             return String(localized: LocalizedStringResource(
                 "settings.voice.cloudTest.error.unprocessable",
                 defaultValue: "\(providerName) couldn't process that clip. Try again."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         default:
             return transcribeFailedMessage
         }
@@ -331,37 +331,37 @@ final class CloudSTTTester {
         String(localized: LocalizedStringResource(
             "settings.voice.cloudTest.error.noKey",
             defaultValue: "Add a \(providerName) key first, then record a test."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var micDeniedMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.cloudTest.error.micDenied",
             defaultValue: "Microphone access is off. Turn it on in Settings → Privacy → Microphone."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var micBusyMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.cloudTest.error.micBusy",
             defaultValue: "The microphone is busy. Stop other recording and try again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var micFailureMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.cloudTest.error.micFailure",
             defaultValue: "Couldn't start recording. Try again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var noSpeechMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.cloudTest.error.noSpeech",
             defaultValue: "No speech detected. Try again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
     private static var transcribeFailedMessage: String {
         String(localized: LocalizedStringResource(
             "settings.voice.cloudTest.error.transcribeFailed",
             defaultValue: "Couldn't transcribe that. Try again."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 }
 

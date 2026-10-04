@@ -131,7 +131,7 @@ struct CustomSTTConfigBody: View {
     private var editorTitle: String {
         let name = viewModel.customVoiceEndpointName(for: uuid)
         return name.isEmpty
-            ? String(localized: LocalizedStringResource("settings.voice.custom.newEndpoint.title", defaultValue: "New endpoint"))
+            ? String(localized: LocalizedStringResource("settings.voice.custom.newEndpoint.title", defaultValue: "New endpoint", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             : name
     }
 
@@ -163,8 +163,8 @@ struct CustomSTTConfigBody: View {
         .scrollDismissesKeyboard(.interactively)
         .sheet(isPresented: $showingSecretSheet) {
             SecretEntrySheet(
-                title: LocalizedStringResource("settings.stt.custom.key.sheet.title", defaultValue: "Enter API key"),
-                prompt: String(localized: LocalizedStringResource("settings.stt.custom.key.placeholder", defaultValue: "Paste your endpoint's API key")),
+                title: LocalizedStringResource("settings.stt.custom.key.sheet.title", defaultValue: "Enter API key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
+                prompt: String(localized: LocalizedStringResource("settings.stt.custom.key.placeholder", defaultValue: "Paste your endpoint's API key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 initialValue: pendingKey,
                 onCommit: { pendingKey = $0 }
             )
@@ -192,18 +192,18 @@ struct CustomSTTConfigBody: View {
             onDiscard: { await viewModel.cancelCustomVoiceEndpointEdit(for: uuid) },
             suppressCancelOnExit: $suppressCancelOnExit,
             title: editorTitle,
-            saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save"),
+            saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             // Always a PUSH from the voice-provider list — never a modal root.
             exit: .back,
             canSave: { canSave },
             onSave: { saveTapped() }
         )
         .alert(
-            LocalizedStringResource("settings.voice.custom.deleteAlert.title", defaultValue: "Delete endpoint?"),
+            LocalizedStringResource("settings.voice.custom.deleteAlert.title", defaultValue: "Delete endpoint?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: $showingDeleteConfirm
         ) {
             Button(
-                LocalizedStringResource("settings.voice.custom.deleteAlert.confirm", defaultValue: "Delete"),
+                LocalizedStringResource("settings.voice.custom.deleteAlert.confirm", defaultValue: "Delete", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .destructive
             ) {
                 Task {
@@ -215,14 +215,14 @@ struct CustomSTTConfigBody: View {
                 }
             }
             Button(
-                LocalizedStringResource("settings.stt.custom.forgetAlert.cancel", defaultValue: "Cancel"),
+                LocalizedStringResource("settings.stt.custom.forgetAlert.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) { }
         } message: {
             Text(LocalizedStringResource(
                 "settings.voice.custom.deleteAlert.message",
                 defaultValue: "Conduck removes this endpoint and erases its saved URL, key, model, and pin. If it's your active voice, playback falls back to Apple."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -242,12 +242,12 @@ struct CustomSTTConfigBody: View {
             authToggle
             secretRow           // ordinary row; SecureField lives in SecretEntrySheet
         } header: {
-            Text(LocalizedStringResource("settings.voice.section.connection", defaultValue: "Connection"))
+            Text(LocalizedStringResource("settings.voice.section.connection", defaultValue: "Connection", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.stt.custom.connection.footer",
                 defaultValue: "Your own OpenAI-compatible server — it can do speech-to-text, text-to-speech, or both."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -271,7 +271,7 @@ struct CustomSTTConfigBody: View {
             // bordered Test button at its compact intrinsic size inside it.
             .settingsCardPassiveRow()
         } header: {
-            Text(LocalizedStringResource("settings.voice.section.speechToText", defaultValue: "Speech-to-Text"))
+            Text(LocalizedStringResource("settings.voice.section.speechToText", defaultValue: "Speech-to-Text", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             // Two footer lines, stacked explicitly rather than left as two loose
             // subviews: the macOS card lays its footer slot out with zero
@@ -281,12 +281,12 @@ struct CustomSTTConfigBody: View {
                 Text(LocalizedStringResource(
                     "settings.stt.custom.stt.footer",
                     defaultValue: "Test connection sends a one-second clip through your server."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 // The transcription disclosure — see the file header.
                 Text(LocalizedStringResource(
                     "settings.stt.custom.stt.instructionNotice",
                     defaultValue: "What this endpoint transcribes becomes the instruction your AI acts on with its tools — and on CarPlay, Apple Watch, or a Shortcut it's sent without you reading it first."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -300,7 +300,7 @@ struct CustomSTTConfigBody: View {
             set: { viewModel.setCustomVoiceEndpointName($0, for: uuid) }
         )
         VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringResource("settings.voice.custom.name.label", defaultValue: "Name"))
+            Text(LocalizedStringResource("settings.voice.custom.name.label", defaultValue: "Name", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             TextField(
@@ -309,7 +309,7 @@ struct CustomSTTConfigBody: View {
                 prompt: Text(LocalizedStringResource(
                     "settings.voice.custom.name.placeholder",
                     defaultValue: "My endpoint"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             )
                 .labelsHidden()
                 #if os(iOS)
@@ -322,7 +322,7 @@ struct CustomSTTConfigBody: View {
                     LocalizedStringResource(
                         "settings.voice.custom.name.duplicate",
                         defaultValue: "Another endpoint already uses this name."
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "exclamationmark.triangle"
                 )
                 .font(.caption2)
@@ -340,7 +340,7 @@ struct CustomSTTConfigBody: View {
             set: { viewModel.customSTTURLStrings[uuid] = $0 }
         )
         VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringResource("settings.stt.custom.url.label", defaultValue: "Endpoint base URL"))
+            Text(LocalizedStringResource("settings.stt.custom.url.label", defaultValue: "Endpoint base URL", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             TextField(
@@ -349,7 +349,7 @@ struct CustomSTTConfigBody: View {
                 prompt: Text(LocalizedStringResource(
                     "settings.stt.custom.url.placeholder",
                     defaultValue: "https://whisper.example.com"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             )
                 .labelsHidden()
                 #if os(iOS)
@@ -362,7 +362,7 @@ struct CustomSTTConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.stt.custom.url.hint.both",
                 defaultValue: "Just the base — Conduck adds /v1/audio/transcriptions or /v1/audio/speech."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
             if let portHint = nonStandardPortHint {
@@ -394,7 +394,7 @@ struct CustomSTTConfigBody: View {
         return String(localized: LocalizedStringResource(
             "settings.endpoint.plainHTTP.warning.v2",
             defaultValue: "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// Inline Toggle for the two auth schemes the BYO endpoint supports
@@ -448,7 +448,7 @@ struct CustomSTTConfigBody: View {
                 Text(LocalizedStringResource(
                     "settings.stt.custom.auth.requiresKey.label",
                     defaultValue: "Requires an API key"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
         #else
@@ -465,7 +465,7 @@ struct CustomSTTConfigBody: View {
     /// it sits relative to the switch differs (see `authToggle`).
     private var authToggleLabel: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(LocalizedStringResource("settings.stt.custom.auth.requiresKey.label", defaultValue: "Requires an API key"))
+            Text(LocalizedStringResource("settings.stt.custom.auth.requiresKey.label", defaultValue: "Requires an API key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             // String-swap (NOT an if/else producing two Texts) so the view
@@ -474,11 +474,11 @@ struct CustomSTTConfigBody: View {
                 ? LocalizedStringResource(
                     "settings.stt.custom.auth.keyless.helper",
                     defaultValue: "Keyless local server — Conduck sends no Authorization header and the API key below is ignored."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 : LocalizedStringResource(
                     "settings.stt.custom.auth.requiresKey.helper",
                     defaultValue: "Turn off for a keyless local server — Conduck sends no Authorization header."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -495,7 +495,7 @@ struct CustomSTTConfigBody: View {
                 showingSecretSheet = true
             } label: {
                 HStack {
-                    Text(LocalizedStringResource("settings.stt.custom.key.label", defaultValue: "API key"))
+                    Text(LocalizedStringResource("settings.stt.custom.key.label", defaultValue: "API key", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
                     Spacer()
@@ -518,7 +518,7 @@ struct CustomSTTConfigBody: View {
     @ViewBuilder
     private var secretStatusLabel: some View {
         if !pendingKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Text(LocalizedStringResource("settings.secret.entered", defaultValue: "Entered"))
+            Text(LocalizedStringResource("settings.secret.entered", defaultValue: "Entered", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.success)
         } else if let masked = viewModel.customSTTMaskedTails[uuid], case .valid = rowState {
@@ -526,7 +526,7 @@ struct CustomSTTConfigBody: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(AppColors.textTertiary)
         } else {
-            Text(LocalizedStringResource("settings.secret.notSet", defaultValue: "Set"))
+            Text(LocalizedStringResource("settings.secret.notSet", defaultValue: "Set", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -539,7 +539,7 @@ struct CustomSTTConfigBody: View {
             set: { viewModel.customSTTModels[uuid] = $0 }
         )
         VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringResource("settings.stt.custom.model.label", defaultValue: "Model"))
+            Text(LocalizedStringResource("settings.stt.custom.model.label", defaultValue: "Model", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             TextField("", text: modelBinding, prompt: Text(verbatim: "whisper-1"))
@@ -554,7 +554,7 @@ struct CustomSTTConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.stt.custom.model.helper",
                 defaultValue: "Default whisper-1. Set the tag your server expects."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -576,7 +576,7 @@ struct CustomSTTConfigBody: View {
             ttsModelField
             ttsActionRow
         } header: {
-            Text(LocalizedStringResource("settings.tts.custom.header", defaultValue: "Text-to-Speech"))
+            Text(LocalizedStringResource("settings.tts.custom.header", defaultValue: "Text-to-Speech", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             ttsFooter
         }
@@ -586,7 +586,7 @@ struct CustomSTTConfigBody: View {
     private var ttsVoiceField: some View {
         let provider = TTSProvider.lookup(id: ttsProviderID)
         VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringResource("settings.tts.custom.voice.label", defaultValue: "Voice"))
+            Text(LocalizedStringResource("settings.tts.custom.voice.label", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             TextField("", text: $pendingTTSVoice, prompt: Text(verbatim: provider.defaultVoice))
@@ -604,7 +604,7 @@ struct CustomSTTConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.tts.custom.voice.helper",
                 defaultValue: "Default alloy. Voice names are server-specific (e.g. alloy, af_bella)."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -618,7 +618,7 @@ struct CustomSTTConfigBody: View {
             set: { viewModel.customTTSModels[uuid] = $0 }
         )
         VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringResource("settings.tts.custom.model.label", defaultValue: "Speech model"))
+            Text(LocalizedStringResource("settings.tts.custom.model.label", defaultValue: "Speech model", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline)
                 .foregroundStyle(AppColors.textPrimary)
             TextField("", text: modelBinding, prompt: Text(verbatim: "tts-1"))
@@ -635,7 +635,7 @@ struct CustomSTTConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.tts.custom.model.helper",
                 defaultValue: "Default tts-1. /v1/audio/speech needs a model — set the tag your server expects (e.g. tts-1, kokoro)."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
         }
@@ -662,12 +662,12 @@ struct CustomSTTConfigBody: View {
                 if isChecking {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text(LocalizedStringResource("settings.voice.tts.previewPlaying", defaultValue: "Playing…"))
+                        Text(LocalizedStringResource("settings.voice.tts.previewPlaying", defaultValue: "Playing…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline)
                     }
                 } else {
                     Label(
-                        LocalizedStringResource("settings.voice.tts.preview", defaultValue: "Speak a sample"),
+                        LocalizedStringResource("settings.voice.tts.preview", defaultValue: "Speak a sample", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "speaker.wave.2"
                     )
                     .font(.subheadline.weight(.semibold))
@@ -694,7 +694,7 @@ struct CustomSTTConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.tts.custom.footer",
                 defaultValue: "If a reply can't reach this provider, it's spoken with Apple's on-device voice. Apple Watch always uses the Apple voice."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -778,7 +778,7 @@ struct CustomSTTConfigBody: View {
             runTest()
         } label: {
             Label(
-                LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice"),
+                LocalizedStringResource("settings.voice.testConnection.button", defaultValue: "Test voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "checkmark.shield"
             )
             .font(.subheadline.weight(.semibold))
@@ -805,7 +805,7 @@ struct CustomSTTConfigBody: View {
                     // as a heavy filled red slab in a macOS grouped Form.
                     #if os(macOS)
                     Label(
-                        LocalizedStringResource("settings.voice.custom.delete.button", defaultValue: "Delete endpoint"),
+                        LocalizedStringResource("settings.voice.custom.delete.button", defaultValue: "Delete endpoint", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "trash"
                     )
                     .font(.subheadline)
@@ -813,7 +813,7 @@ struct CustomSTTConfigBody: View {
                     HStack {
                         Spacer()
                         Label(
-                            LocalizedStringResource("settings.voice.custom.delete.button", defaultValue: "Delete endpoint"),
+                            LocalizedStringResource("settings.voice.custom.delete.button", defaultValue: "Delete endpoint", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             systemImage: "trash"
                         )
                         .font(.subheadline)
@@ -850,7 +850,7 @@ struct CustomSTTConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.voice.detail.creditHint",
                 defaultValue: "Tests and previews use a small amount of your provider's credits."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
         }
     }
@@ -882,7 +882,7 @@ struct CustomSTTConfigBody: View {
         case .checking:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(LocalizedStringResource("settings.remoteAgent.testConnection.checking", defaultValue: "Checking…"))
+                Text(LocalizedStringResource("settings.remoteAgent.testConnection.checking", defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -890,7 +890,7 @@ struct CustomSTTConfigBody: View {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(AppColors.success)
-                Text(LocalizedStringResource("settings.remoteAgent.testConnection.success", defaultValue: "Connected"))
+                Text(LocalizedStringResource("settings.remoteAgent.testConnection.success", defaultValue: "Connected", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -917,7 +917,7 @@ struct CustomSTTConfigBody: View {
                     // Read-only checklist — inset and pitch, never a wash.
                     .settingsCardPassiveRow()
             } header: {
-                Text(LocalizedStringResource("settings.stt.custom.testResult.header", defaultValue: "Test result"))
+                Text(LocalizedStringResource("settings.stt.custom.testResult.header", defaultValue: "Test result", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -990,7 +990,7 @@ struct CustomSTTConfigBody: View {
             }
             #endif
         } header: {
-            Text(LocalizedStringResource("settings.remoteAgent.advanced.header", defaultValue: "Advanced"))
+            Text(LocalizedStringResource("settings.remoteAgent.advanced.header", defaultValue: "Advanced", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -999,7 +999,7 @@ struct CustomSTTConfigBody: View {
         Text(LocalizedStringResource(
             "settings.remoteAgent.fingerprint.label",
             defaultValue: "Pinned cert fingerprint"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .foregroundStyle(AppColors.textPrimary)
     }
 
@@ -1013,7 +1013,7 @@ struct CustomSTTConfigBody: View {
                 prompt: Text(LocalizedStringResource(
                     "settings.remoteAgent.fingerprint.placeholder",
                     defaultValue: "SHA-256 hex (optional)"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             )
                 .labelsHidden()
                 .font(.system(.body, design: .monospaced))
@@ -1026,7 +1026,7 @@ struct CustomSTTConfigBody: View {
             Text(LocalizedStringResource(
                 "settings.remoteAgent.fingerprint.helperShort.v2",
                 defaultValue: "Optional. Conduck already refuses any certificate this device doesn't trust; a fingerprint narrows that to one exact certificate. Leave it empty unless you have a reason."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
             if let pinOnPlainHTTPBlocker {
@@ -1076,7 +1076,7 @@ struct CustomSTTConfigBody: View {
             format: String(localized: LocalizedStringResource(
                 "settings.remoteAgent.url.portHint",
                 defaultValue: "Using port %lld"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             port
         )
     }

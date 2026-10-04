@@ -48,7 +48,7 @@ struct WorkDeskProjectPreview: View {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     if materials.isEmpty {
-                        Text(LocalizedStringResource("workdesk.project.previewEmpty", defaultValue: "Drop materials into this project"))
+                        Text(LocalizedStringResource("workdesk.project.previewEmpty", defaultValue: "Drop materials into this project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                             .frame(maxWidth: .infinity, minHeight: 110).padding(16)
                     } else {
@@ -70,7 +70,7 @@ struct WorkDeskProjectPreview: View {
                 registerTargets()
             }
             if workspace.organization.canPresentFreeProjectSelection {
-                Button(LocalizedStringResource("workdesk.pro.chooseProjects", defaultValue: "Choose projects")) {
+                Button(LocalizedStringResource("workdesk.pro.chooseProjects", defaultValue: "Choose projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     workspace.organization.projectSelectionRequested = true
                 }
                 .inlineLinkButton()
@@ -80,7 +80,7 @@ struct WorkDeskProjectPreview: View {
                 HStack(alignment: .top, spacing: 8) {
                     Text(verbatim: error).font(.caption).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    Button(LocalizedStringResource("common.ok", defaultValue: "OK")) {
+                    Button(LocalizedStringResource("common.ok", defaultValue: "OK", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         workspace.organization.errorMessage = nil
                     }.inlineLinkButton()
                 }
@@ -90,7 +90,7 @@ struct WorkDeskProjectPreview: View {
             HStack {
                 Spacer(minLength: 0)
                 Button(action: onOpenProject) {
-                    Label(LocalizedStringResource("workdesk.project.preview.open", defaultValue: "Open project"),
+                    Label(LocalizedStringResource("workdesk.project.preview.open", defaultValue: "Open project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                           systemImage: "arrow.up.right")
                         .font(.subheadline.weight(.semibold)).padding(.horizontal, 10).frame(minHeight: 44)
                 }
@@ -198,14 +198,14 @@ struct WorkDeskProjectPreview: View {
                 Text(verbatim: project?.title ?? "").font(.title3.weight(.semibold)).lineLimit(2)
                 Text(WorkDeskCopy.materialCount(materials.count)).font(.caption).foregroundStyle(AppColors.textSecondary)
                 if project?.isArchived == true {
-                    Text(LocalizedStringResource("workdesk.projects.archived", defaultValue: "Archived"))
+                    Text(LocalizedStringResource("workdesk.projects.archived", defaultValue: "Archived", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption).foregroundStyle(AppColors.textSecondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading).accessibilityAddTraits(.isHeader)
             Button(action: onClose) { Image(systemName: "xmark").frame(width: closeSize, height: closeSize) }
                 .pointerIconButton(size: closeSize).focused($closeFocused)
-                .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.preview.close", defaultValue: "Close preview")))
+                .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.preview.close", defaultValue: "Close preview", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }.padding(.leading, 18).padding(.trailing, 10).padding(.top, 14).padding(.bottom, 8)
     }
 
@@ -272,14 +272,14 @@ private struct WorkDeskProjectPreviewRow: View {
                 Image(systemName: "ellipsis").frame(width: 44, height: 44)
             }
             .pointerIconButton(size: 44)
-            .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.preview.materialActions", defaultValue: "Material actions")))
+            .accessibilityLabel(Text(LocalizedStringResource("workdesk.project.preview.materialActions", defaultValue: "Material actions", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .disabled(workspace.organization.isSaving)
         }
     }
 
     @ViewBuilder private var organizationMenu: some View {
         if actions.canMoveHome {
-            Button(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home"), systemImage: "tray.and.arrow.up") {
+            Button(LocalizedStringResource("workdesk.moveToHome", defaultValue: "Move to Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "tray.and.arrow.up") {
                 Task { await actions.move(to: nil) }
             }
         }
@@ -289,7 +289,7 @@ private struct WorkDeskProjectPreviewRow: View {
                     Button { Task { await actions.move(to: destination.id) } }
                         label: { Text(verbatim: destination.title) }
                 }
-            } label: { Label(LocalizedStringResource("workdesk.move", defaultValue: "Move to"), systemImage: "folder") }
+            } label: { Label(LocalizedStringResource("workdesk.move", defaultValue: "Move to", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder") }
         }
         if !actions.additionalDestinations.isEmpty {
             Menu {
@@ -298,7 +298,7 @@ private struct WorkDeskProjectPreviewRow: View {
                         label: { Text(verbatim: destination.title) }
                 }
             } label: {
-                Label(LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…"),
+                Label(LocalizedStringResource("workdesk.addToAnotherProject", defaultValue: "Add to another project…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                       systemImage: "folder.badge.plus")
             }
         }

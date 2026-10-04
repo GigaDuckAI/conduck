@@ -45,21 +45,21 @@ enum WorkDeskHandoffError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .noGateway:
-            return String(localized: "workdesk.handoff.noGateway", defaultValue: "Choose an available AI connection to continue.")
+            return String(localized: "workdesk.handoff.noGateway", defaultValue: "Choose an available AI connection to continue.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .emptyBrief:
-            return String(localized: "workdesk.handoff.emptyBrief", defaultValue: "Add an instruction so your AI knows what to do with these materials.")
+            return String(localized: "workdesk.handoff.emptyBrief", defaultValue: "Add an instruction so your AI knows what to do with these materials.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .materialChanged:
-            return String(localized: "workdesk.handoff.materialChanged", defaultValue: "A selected material changed. Close this brief and open it again to review the latest version.")
+            return String(localized: "workdesk.handoff.materialChanged", defaultValue: "A selected material changed. Close this brief and open it again to review the latest version.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .bytesUnavailable:
-            return String(localized: "workdesk.handoff.bytesUnavailable", defaultValue: "A selected file is not available on this device. Let it finish syncing, reattach it, or leave it out of this handoff.")
+            return String(localized: "workdesk.handoff.bytesUnavailable", defaultValue: "A selected file is not available on this device. Let it finish syncing, reattach it, or leave it out of this handoff.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .needsFileTransfer:
-            return String(localized: "workdesk.handoff.needsFileTransfer", defaultValue: "This file needs a connection with file transfer. Choose another AI, or leave the file out of this handoff.")
+            return String(localized: "workdesk.handoff.needsFileTransfer", defaultValue: "This file needs a connection with file transfer. Choose another AI, or leave the file out of this handoff.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .connectionChanged:
-            return String(localized: "workdesk.handoff.connectionChanged", defaultValue: "The selected connection changed. Review the handoff again before sending.")
+            return String(localized: "workdesk.handoff.connectionChanged", defaultValue: "The selected connection changed. Review the handoff again before sending.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .submissionRefused:
-            return String(localized: "workdesk.handoff.submissionRefused", defaultValue: "The chat could not accept this handoff. Your brief and materials are still in Work.")
+            return String(localized: "workdesk.handoff.submissionRefused", defaultValue: "The chat could not accept this handoff. Your brief and materials are still in Work.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .remoteResult:
-            return String(localized: "workdesk.handoff.remoteResult", defaultValue: "This file is still on its gateway. Open its source conversation, download it, then add the file to this project before including it.")
+            return String(localized: "workdesk.handoff.remoteResult", defaultValue: "This file is still on its gateway. Open its source conversation, download it, then add the file to this project before including it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }
@@ -427,7 +427,7 @@ final class WorkDeskHandoff {
         if let known = error as? WorkDeskHandoffError { return known.localizedDescription }
         if let known = error as? WorkDeskStoreError { return known.localizedDescription }
         if error is WorkMaterialExportError { return WorkDeskHandoffError.bytesUnavailable.localizedDescription }
-        return String(localized: "workdesk.handoff.failed", defaultValue: "The handoff could not finish. Your project is unchanged. Review it again to try once more.")
+        return String(localized: "workdesk.handoff.failed", defaultValue: "The handoff could not finish. Your project is unchanged. Review it again to try once more.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 }
 #endif

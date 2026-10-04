@@ -22,24 +22,24 @@ enum ProPaywallContext: Identifiable {
 
     var title: LocalizedStringResource {
         switch self {
-        case .manual: LocalizedStringResource("pro.title.manual", defaultValue: "More room for your work.")
-        case .projectLimit: LocalizedStringResource("pro.title.project", defaultValue: "Make room for another project.")
-        case .gatewayLimit: LocalizedStringResource("pro.title.gateway", defaultValue: "Connect another gateway.")
+        case .manual: LocalizedStringResource("pro.title.manual", defaultValue: "More room for your work.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .projectLimit: LocalizedStringResource("pro.title.project", defaultValue: "Make room for another project.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .gatewayLimit: LocalizedStringResource("pro.title.gateway", defaultValue: "Connect another gateway.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
     var explanation: LocalizedStringResource {
         switch self {
-        case .manual: LocalizedStringResource("pro.body.manual", defaultValue: "The free plan includes three active projects and three configured gateways. Go further with Pro.")
-        case .projectLimit: LocalizedStringResource("pro.body.project", defaultValue: "You have three active projects. Keep every project moving with Pro, or archive a project to free a slot.")
-        case .gatewayLimit: LocalizedStringResource("pro.body.gateway", defaultValue: "Your three configured gateway slots are in use. OpenRouter is always available.")
+        case .manual: LocalizedStringResource("pro.body.manual", defaultValue: "The free plan includes three active projects and three configured gateways. Go further with Pro.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .projectLimit: LocalizedStringResource("pro.body.project", defaultValue: "You have three active projects. Keep every project moving with Pro, or archive a project to free a slot.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .gatewayLimit: LocalizedStringResource("pro.body.gateway", defaultValue: "Your three configured gateway slots are in use. OpenRouter is always available.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
     var managementTitle: LocalizedStringResource {
         switch self {
-        case .gatewayLimit: LocalizedStringResource("pro.manage.gateways", defaultValue: "Manage gateways")
-        case .manual, .projectLimit: LocalizedStringResource("pro.manage.projects", defaultValue: "Manage projects")
+        case .gatewayLimit: LocalizedStringResource("pro.manage.gateways", defaultValue: "Manage gateways", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+        case .manual, .projectLimit: LocalizedStringResource("pro.manage.projects", defaultValue: "Manage projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }
@@ -118,7 +118,7 @@ struct ProPaywallView: View {
 
     private var closeButton: some View {
         Button { dismiss() } label: {
-            Label(LocalizedStringResource("pro.close", defaultValue: "Close Conduck Pro"), systemImage: "xmark")
+            Label(LocalizedStringResource("pro.close", defaultValue: "Close Conduck Pro", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "xmark")
                 .labelStyle(.iconOnly)
         }
         .keyboardShortcut(.cancelAction)
@@ -148,7 +148,7 @@ struct ProPaywallView: View {
         } else {
             ScrollView {
                 marketingHeader
-                Text(LocalizedStringResource("pro.store.community", defaultValue: "Subscriptions are not available in this build."))
+                Text(LocalizedStringResource("pro.store.community", defaultValue: "Subscriptions are not available in this build.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding()
@@ -171,10 +171,10 @@ struct ProPaywallView: View {
             #endif
 
             VStack(alignment: .leading, spacing: 20) {
-                benefit(LocalizedStringResource("pro.benefit.projects", defaultValue: "Unlimited active projects"), systemImage: "folder")
-                benefit(LocalizedStringResource("pro.benefit.gateways", defaultValue: "Unlimited configured gateways"), systemImage: "server.rack")
-                benefit(LocalizedStringResource("pro.benefit.advanced", defaultValue: "Advanced features as they arrive"), systemImage: "sparkles")
-                benefit(LocalizedStringResource("pro.benefit.support", defaultValue: "Support this project"), systemImage: "heart")
+                benefit(LocalizedStringResource("pro.benefit.projects", defaultValue: "Unlimited active projects", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "folder")
+                benefit(LocalizedStringResource("pro.benefit.gateways", defaultValue: "Unlimited configured gateways", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "server.rack")
+                benefit(LocalizedStringResource("pro.benefit.advanced", defaultValue: "Advanced features as they arrive", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "sparkles")
+                benefit(LocalizedStringResource("pro.benefit.support", defaultValue: "Support this project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "heart")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 24)
@@ -182,9 +182,9 @@ struct ProPaywallView: View {
             .overlay(alignment: .bottom) { Divider().overlay(AppColors.border) }
             if store.hasProAccess {
                 VStack(spacing: 12) {
-                    Text(LocalizedStringResource("pro.active", defaultValue: "Conduck Pro is active"))
+                    Text(LocalizedStringResource("pro.active", defaultValue: "Conduck Pro is active", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.headline)
-                    Button(LocalizedStringResource("pro.subscription.manage", defaultValue: "Manage subscription")) {
+                    Button(LocalizedStringResource("pro.subscription.manage", defaultValue: "Manage subscription", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         #if os(macOS)
                         openURL(URL(string: "https://apps.apple.com/account/subscriptions")!)
                         #else
@@ -227,7 +227,7 @@ struct ProPaywallView: View {
                     .background(AppColors.brandAmber.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
             }
             Text(store.hasProAccess
-                 ? LocalizedStringResource("pro.title.active", defaultValue: "Room for all your work.")
+                 ? LocalizedStringResource("pro.title.active", defaultValue: "Room for all your work.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                  : context.title)
                 .font(.system(size: titleSize, weight: .bold))
                 .accessibilityAddTraits(.isHeader)
@@ -264,7 +264,7 @@ struct ProPaywallView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.updatesFrequently)
             }
-            Text(LocalizedStringResource("pro.provider.cost", defaultValue: "AI and speech usage are billed separately by your providers."))
+            Text(LocalizedStringResource("pro.provider.cost", defaultValue: "AI and speech usage are billed separately by your providers.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.system(size: footnoteSize))
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -298,7 +298,7 @@ struct ProPaywallView: View {
             } label: {
                 HStack {
                     if store.isRestoring { ProgressView().controlSize(.small) }
-                    Text(LocalizedStringResource("pro.restore", defaultValue: "Restore Purchases"))
+                    Text(LocalizedStringResource("pro.restore", defaultValue: "Restore Purchases", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
                 .frame(minHeight: 44)
             }
@@ -342,7 +342,7 @@ struct ProSettingsEntry: View {
         #endif
         .accessibilityLabel(Text(verbatim: "Conduck Pro"))
         .accessibilityValue(store.hasProAccess
-            ? Text(LocalizedStringResource("pro.active", defaultValue: "Conduck Pro is active"))
+            ? Text(LocalizedStringResource("pro.active", defaultValue: "Conduck Pro is active", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             : Text(verbatim: ""))
         .sheet(isPresented: $showingPro) { ProPaywallView() }
     }

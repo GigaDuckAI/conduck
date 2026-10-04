@@ -26,7 +26,7 @@ struct SidebarSettingsFooter: View {
                         .resizable()
                         .interpolation(.high)
                         .frame(width: 32, height: 32)
-                    Text(LocalizedStringResource("menu.settings.short", defaultValue: "Settings"))
+                    Text(LocalizedStringResource("menu.settings.short", defaultValue: "Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(AppColors.textPrimary)
                     Spacer()

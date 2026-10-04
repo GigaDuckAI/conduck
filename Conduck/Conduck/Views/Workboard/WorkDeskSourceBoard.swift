@@ -118,11 +118,11 @@ struct WorkDeskSourceBoard: View {
         }
         .onChange(of: renderedLayout) { _, _ in updateReadableSurface() }
         .confirmationDialog(
-            Text(LocalizedStringResource("workdesk.material.delete.title", defaultValue: "Delete this material everywhere?")),
+            Text(LocalizedStringResource("workdesk.material.delete.title", defaultValue: "Delete this material everywhere?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
             titleVisibility: .visible, presenting: pendingRemoval
         ) { material in
-            Button(LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere"), role: .destructive) {
+            Button(LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .destructive) {
                 pendingRemoval = nil
                 Task {
                     if let child = material.companion {
@@ -132,8 +132,8 @@ struct WorkDeskSourceBoard: View {
             }
         } message: { material in
             Text(material.companion == nil
-                ? LocalizedStringResource("workdesk.material.delete.message", defaultValue: "This material will be deleted from Home and every project that contains it.")
-                : LocalizedStringResource("workdesk.material.delete.pair", defaultValue: "This picture and its voice note will be deleted from Home and every project that contains them."))
+                ? LocalizedStringResource("workdesk.material.delete.message", defaultValue: "This material will be deleted from Home and every project that contains it.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                : LocalizedStringResource("workdesk.material.delete.pair", defaultValue: "This picture and its voice note will be deleted from Home and every project that contains them.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         .onChange(of: workspace.scope) { _, _ in cancelReadableReorder() }
         .onChange(of: workspace.search) { _, _ in cancelReadableReorder() }
@@ -185,7 +185,7 @@ struct WorkDeskSourceBoard: View {
             } : nil,
             transferCoordinator: workspace.transferCoordinator,
             transferLocation: boardScope.location,
-            transferTitle: project?.title ?? String(localized: "workdesk.all", defaultValue: "Home"),
+            transferTitle: project?.title ?? String(localized: "workdesk.all", defaultValue: "Home", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             transferPriority: transferPriority,
             onTransfer: { request in
                 await workspace.transfer(request, materials: viewModel.desk?.materials ?? item.materials)
@@ -218,7 +218,7 @@ struct WorkDeskSourceBoard: View {
                             ForEach(projects) { project in projectButton(project, row: true) }
                         }
                         if !visible.isEmpty {
-                            Text(LocalizedStringResource("workdesk.home.loose", defaultValue: "On Home"))
+                            Text(LocalizedStringResource("workdesk.home.loose", defaultValue: "On Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                 .font(.caption.weight(.semibold)).foregroundStyle(AppColors.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
                         }
@@ -267,7 +267,7 @@ struct WorkDeskSourceBoard: View {
         }
         workspace.transferCoordinator.register(WorkDeskTransferSurface(id: readableSurfaceID,
             location: boardScope.location,
-            title: project?.title ?? String(localized: "workdesk.all", defaultValue: "Home"),
+            title: project?.title ?? String(localized: "workdesk.all", defaultValue: "Home", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             frame: boardGlobalFrame, priority: transferPriority, isSpatial: false))
     }
 
@@ -424,7 +424,7 @@ struct WorkDeskSourceBoard: View {
             Color.clear.contentShape(Rectangle())
         }
         .choiceCardButton(cornerRadius: 14)
-        .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.select", defaultValue: "Select material")))
+        .accessibilityLabel(Text(LocalizedStringResource("workdesk.material.select", defaultValue: "Select material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .accessibilityValue(Text(verbatim: material.name))
         .accessibilityAddTraits(selectedIDs.contains(material.id) ? .isSelected : [])
         .contextMenu {
@@ -469,16 +469,16 @@ struct WorkDeskSourceBoard: View {
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(AppColors.accent)
             Text(isSearching
-                 ? LocalizedStringResource("workdesk.search.empty.title", defaultValue: "Nothing found")
+                 ? LocalizedStringResource("workdesk.search.empty.title", defaultValue: "Nothing found", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                  : project != nil
-                    ? LocalizedStringResource("workdesk.project.empty.title", defaultValue: "This project is ready for ideas")
-                    : LocalizedStringResource("workdesk.empty.title", defaultValue: "Room to think"))
+                    ? LocalizedStringResource("workdesk.project.empty.title", defaultValue: "This project is ready for ideas", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("workdesk.empty.title", defaultValue: "Room to think", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.title2.weight(.semibold))
             Text(isSearching
-                ? LocalizedStringResource("workdesk.search.empty", defaultValue: "No ideas, files or projects match this search. Try another word.")
+                ? LocalizedStringResource("workdesk.search.empty", defaultValue: "No ideas, files or projects match this search. Try another word.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 : project != nil
-                    ? LocalizedStringResource("workdesk.project.empty.message", defaultValue: "Capture a thought below, or move materials here from Home or another project.")
-                    : LocalizedStringResource("workdesk.all.empty.message", defaultValue: "Capture a thought or add a file below. Move related materials into projects to make room on your desk."))
+                    ? LocalizedStringResource("workdesk.project.empty.message", defaultValue: "Capture a thought below, or move materials here from Home or another project.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("workdesk.all.empty.message", defaultValue: "Capture a thought or add a file below. Move related materials into projects to make room on your desk.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline).foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 340)
         }
@@ -524,12 +524,12 @@ private struct WorkDeskReadableProject: View {
                     && workspace.transferCoordinator.destination(at: global)?.surfaceID == targetID
             })
         .contextMenu {
-            Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project"), systemImage: "pencil") {
+            Button(LocalizedStringResource("workdesk.project.rename", defaultValue: "Rename project", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "pencil") {
                 workspace.editProject(project.record)
             }
             WorkDeskProjectColorMenu(project: project.record, organization: workspace.organization)
             WorkDeskProjectArchiveButton(project: project.record, organization: workspace.organization)
-            Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…"), systemImage: "trash") {
+            Button(LocalizedStringResource("workdesk.project.delete.action", defaultValue: "Delete project…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "trash") {
                 workspace.requestProjectDeletion(project.id)
             }
         }

@@ -291,12 +291,12 @@ final class RegionCaptureController {
             title: String(localized: LocalizedStringResource(
                 "regionCapture.permission.mic.title",
                 defaultValue: "Conduck needs microphone access"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             body: microphoneBody(for: purpose),
             primaryButton: String(localized: LocalizedStringResource(
                 "regionCapture.permission.openSettings",
                 defaultValue: "Open System Settings"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             offersSkip: false
         )
         if choice == .primary {
@@ -311,12 +311,12 @@ final class RegionCaptureController {
             return String(localized: LocalizedStringResource(
                 "regionCapture.permission.mic.body",
                 defaultValue: "Region Capture lets you select part of your screen and ask about it by voice. To record your question, Conduck needs microphone access.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .work:
             return String(localized: LocalizedStringResource(
                 "regionCapture.permission.mic.work.body",
                 defaultValue: "Capture to Work saves a spoken note on your desk. To record it, Conduck needs microphone access."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -329,12 +329,12 @@ final class RegionCaptureController {
             title: String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.title",
                 defaultValue: "Conduck needs Screen Recording access"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             body: screenRationaleBody(for: purpose),
             primaryButton: String(localized: LocalizedStringResource(
                 "regionCapture.permission.continue",
                 defaultValue: "Continue"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             offersSkip: purpose == .work
         )
     }
@@ -345,12 +345,12 @@ final class RegionCaptureController {
             return String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.body",
                 defaultValue: "Region Capture lets you select part of your screen and ask about it. To take that screenshot, Conduck needs Screen Recording access.\n\nIf System Settings already shows Conduck as on, turn it off and on again, then quit and reopen Conduck.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .work:
             return String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.work.body",
                 defaultValue: "Capture to Work can save a picture of part of your screen next to your note. To take that picture, Conduck needs Screen Recording access."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -365,9 +365,9 @@ final class RegionCaptureController {
             title: String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.title",
                 defaultValue: "Conduck needs Screen Recording access"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             body: relaunchBody(for: purpose),
-            primaryButton: String(localized: "Quit Conduck"),
+            primaryButton: String(localized: "Quit Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             offersSkip: purpose == .work
         )
         if choice == .primary {
@@ -382,12 +382,12 @@ final class RegionCaptureController {
             return String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.relaunchBody",
                 defaultValue: "Thanks — Screen Recording is now allowed. macOS only applies this after a restart, so please quit and reopen Conduck, then try Region Capture again.\n\nYour screenshot and your words are sent only to the AI gateway you configured — nowhere else."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .work:
             return String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.work.relaunchBody",
                 defaultValue: "Screen Recording is now allowed, but macOS only applies it after a restart. Quit and reopen Conduck to include pictures, or keep going without one."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -400,15 +400,15 @@ final class RegionCaptureController {
             title: String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.title",
                 defaultValue: "Conduck needs Screen Recording access"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             body: String(localized: LocalizedStringResource(
                 "regionCapture.permission.screen.work.deniedBody",
                 defaultValue: "Conduck does not have Screen Recording access yet, so it cannot add a picture. Turn it on in System Settings, or keep going without one."
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             primaryButton: String(localized: LocalizedStringResource(
                 "regionCapture.permission.openSettings",
                 defaultValue: "Open System Settings"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             offersSkip: true
         )
         if choice == .primary {
@@ -450,12 +450,12 @@ final class RegionCaptureController {
             alert.addButton(withTitle: String(localized: LocalizedStringResource(
                 "regionCapture.permission.skipScreenshot",
                 defaultValue: "Continue Without Screenshot"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         }
         alert.addButton(withTitle: String(localized: LocalizedStringResource(
             "regionCapture.permission.cancel",
             defaultValue: "Cancel"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
@@ -786,7 +786,7 @@ private final class RegionOverlayView: NSView {
                     name: String(localized: LocalizedStringResource(
                         "regionCapture.overlay.skipAction",
                         defaultValue: "Skip screenshot"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 ) { [weak self] in
                     // AppKit is main-actor annotated wholesale, so this handler
                     // is already `@MainActor` — no hop, and the skip resolves
@@ -848,12 +848,12 @@ private final class RegionOverlayView: NSView {
             return String(localized: LocalizedStringResource(
                 "regionCapture.overlay.hint",
                 defaultValue: "Drag to capture · Esc to cancel"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .work:
             return String(localized: LocalizedStringResource(
                 "regionCapture.overlay.hint.work",
                 defaultValue: "Drag to capture · Return to skip · Esc to cancel"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 

@@ -97,7 +97,7 @@ struct UsageGatewayDetailView: View {
                 Section {
                     Text(LocalizedStringResource(
                         "settings.usage.gateway.history.explanation",
-                        defaultValue: "Past usage stays here when a gateway is removed or unavailable."))
+                        defaultValue: "Past usage stays here when a gateway is removed or unavailable.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -148,7 +148,7 @@ struct UsageGatewayDetailView: View {
         Section {
             Text(LocalizedStringResource(
                 "settings.usage.detail.empty",
-                defaultValue: "Nothing recorded for this in the selected range."))
+                defaultValue: "Nothing recorded for this in the selected range.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .settingsCardPassiveRow()
@@ -163,28 +163,28 @@ struct UsageGatewayDetailView: View {
         Section {
             UsageStatLayout {
                 UsageStatTile(
-                    value: summary.attemptedTurns.formatted(.number),
+                    value: summary.attemptedTurns.formatted(.number.locale(AppLocalization.locale)),
                     label: LocalizedStringResource(
-                        "settings.usage.stat.turns", defaultValue: "Turns"),
+                        "settings.usage.stat.turns", defaultValue: "Turns", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     accessibility: LocalizedStringResource(
                         "settings.usage.stat.turns.a11y",
-                        defaultValue: "\(summary.attemptedTurns) turns sent")
+                        defaultValue: "\(summary.attemptedTurns) turns sent", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
                 UsageStatTile(
-                    value: summary.recordedAttempts.formatted(.number),
+                    value: summary.recordedAttempts.formatted(.number.locale(AppLocalization.locale)),
                     label: LocalizedStringResource(
-                        "settings.usage.detail.stat.attempts", defaultValue: "Attempts"),
+                        "settings.usage.detail.stat.attempts", defaultValue: "Attempts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     accessibility: LocalizedStringResource(
                         "settings.usage.detail.stat.attempts.a11y",
-                        defaultValue: "\(summary.recordedAttempts) recorded attempts")
+                        defaultValue: "\(summary.recordedAttempts) recorded attempts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
                 UsageStatTile(
-                    value: summary.completedTurns.formatted(.number),
+                    value: summary.completedTurns.formatted(.number.locale(AppLocalization.locale)),
                     label: LocalizedStringResource(
-                        "settings.usage.stat.completed", defaultValue: "Completed"),
+                        "settings.usage.stat.completed", defaultValue: "Completed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     accessibility: LocalizedStringResource(
                         "settings.usage.stat.completed.a11y",
-                        defaultValue: "\(summary.completedTurns) turns completed")
+                        defaultValue: "\(summary.completedTurns) turns completed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
             }
             .settingsCardPassiveRow()
@@ -210,7 +210,7 @@ struct UsageGatewayDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.activity.header", defaultValue: "Activity"))
+                "settings.usage.activity.header", defaultValue: "Activity", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         // NO RANGE FOOTER: the picker at the top of this screen already names
         // the window, one card above.
@@ -224,13 +224,13 @@ struct UsageGatewayDetailView: View {
                 value: UsageDetailFormat.percentText(summary.resolvedAttemptSuccessRate),
                 label: LocalizedStringResource(
                     "settings.usage.reliability.headline",
-                    defaultValue: "of resolved attempts succeeded"),
+                    defaultValue: "of resolved attempts succeeded", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.reliability.headline.a11y",
                     defaultValue: """
                         \(UsageDetailFormat.percentText(summary.resolvedAttemptSuccessRate)) of \
                         resolved attempts succeeded
-                        """)
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
 
             UsageDetailRows.detailDisclosure(
@@ -243,8 +243,8 @@ struct UsageGatewayDetailView: View {
                     UsageValueRow(
                         label: LocalizedStringResource(
                             "settings.usage.reliability.truncated",
-                            defaultValue: "Replies cut short"),
-                        value: summary.truncatedReplies.formatted(.number),
+                            defaultValue: "Replies cut short", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
+                        value: summary.truncatedReplies.formatted(.number.locale(AppLocalization.locale)),
                         icon: "scissors"
                     )
                 }
@@ -256,7 +256,7 @@ struct UsageGatewayDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.reliability.header", defaultValue: "Reliability"))
+                "settings.usage.reliability.header", defaultValue: "Reliability", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             // Same sentence, same key as the overview: the denominator behind
             // the headline is the one thing neither screen's figures reveal.
@@ -264,7 +264,7 @@ struct UsageGatewayDetailView: View {
                 "settings.usage.reliability.footer.rate",
                 defaultValue: """
                     Cancelled and unconfirmed attempts stay out of this rate.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -277,7 +277,7 @@ struct UsageGatewayDetailView: View {
             if timing.sampleCount == 0 {
                 Text(LocalizedStringResource(
                     "settings.usage.response.none",
-                    defaultValue: "No attempt in this range finished with usable timing."))
+                    defaultValue: "No attempt in this range finished with usable timing.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .settingsCardPassiveRow()
@@ -286,10 +286,10 @@ struct UsageGatewayDetailView: View {
                     UsageStatTile(
                         value: UsageDetailFormat.durationText(timing.mean),
                         label: LocalizedStringResource(
-                            "settings.usage.response.average", defaultValue: "Average"),
+                            "settings.usage.response.average", defaultValue: "Average", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         accessibility: LocalizedStringResource(
                             "settings.usage.response.average.a11y",
-                            defaultValue: "Average full-response time \(UsageDetailFormat.durationText(timing.mean))"),
+                            defaultValue: "Average full-response time \(UsageDetailFormat.durationText(timing.mean))", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         prominent: true
                     )
                     // Withheld below the aggregator's minimum sample count: a
@@ -300,10 +300,10 @@ struct UsageGatewayDetailView: View {
                             value: UsageDetailFormat.durationText(p90),
                             label: LocalizedStringResource(
                                 "settings.usage.response.p90",
-                                defaultValue: "90th percentile"),
+                                defaultValue: "90th percentile", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             accessibility: LocalizedStringResource(
                                 "settings.usage.response.p90.a11y",
-                                defaultValue: "90th percentile full-response time \(UsageDetailFormat.durationText(p90))"),
+                                defaultValue: "90th percentile full-response time \(UsageDetailFormat.durationText(p90))", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                             prominent: true
                         )
                     }
@@ -317,14 +317,14 @@ struct UsageGatewayDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.response.header", defaultValue: "Full-response time"))
+                "settings.usage.response.header", defaultValue: "Full-response time", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.usage.response.footer.scope",
                 defaultValue: """
                     Includes the network and any tools your agent ran — not \
                     model latency.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -346,7 +346,7 @@ struct UsageGatewayDetailView: View {
             if tokens.isEmpty {
                 Text(LocalizedStringResource(
                     "settings.usage.tokens.none",
-                    defaultValue: "Not reported by your gateway."))
+                    defaultValue: "Not reported by your gateway.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .settingsCardPassiveRow()
@@ -356,7 +356,7 @@ struct UsageGatewayDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.tokens.header", defaultValue: "Reported tokens"))
+                "settings.usage.tokens.header", defaultValue: "Reported tokens", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -372,7 +372,7 @@ struct UsageGatewayDetailView: View {
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.detail.largestTurns.header",
-                defaultValue: "Largest turns"))
+                defaultValue: "Largest turns", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             // The ranking basis ONLY. It says which number these rows were
             // sorted on and which turns it silently leaves out — neither is
@@ -407,29 +407,29 @@ struct UsageGatewayDetailView: View {
                 UsageValueRow(
                     label: LocalizedStringResource(
                         "settings.usage.detail.model.reported",
-                        defaultValue: "Reported model"),
+                        defaultValue: "Reported model", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     value: reading.value,
                     caption: LocalizedStringResource(
                         "settings.usage.detail.model.reported.caption",
-                        defaultValue: "Named by your gateway on \(UsageDetailFormat.percentText(reading.coverage)) of attempts")
+                        defaultValue: "Named by your gateway on \(UsageDetailFormat.percentText(reading.coverage)) of attempts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.detail.models.header", defaultValue: "Requested models"))
+                "settings.usage.detail.models.header", defaultValue: "Requested models", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text(UsageDetailFormat.shareCaption)
                 Text(LocalizedStringResource(
                     "settings.usage.byModel.footer",
-                    defaultValue: "Based on the model each request asked for."))
+                    defaultValue: "Based on the model each request asked for.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 if reading != nil {
                     Text(LocalizedStringResource(
                         "settings.usage.detail.models.footer.reported",
                         defaultValue: """
                             A gateway naming a different model than the one asked for \
                             is ordinary, not a fault.
-                            """))
+                            """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
         }
@@ -458,7 +458,7 @@ struct UsageGatewayDetailView: View {
         let value = names.count == 1
             ? names[0]
             : String(localized: "settings.usage.detail.model.reported.many",
-                     defaultValue: "\(names.count) models")
+                     defaultValue: "\(names.count) models", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // The same denominator the token-coverage rows on this card use —
         // attempts that reached a stored terminal outcome, so they had their
         // chance to report. A served model is only ever written beside that
@@ -493,7 +493,7 @@ struct UsageGatewayDetailView: View {
             }
         } header: {
             Text(LocalizedStringResource(
-                "settings.usage.detail.byDevice.header", defaultValue: "By device"))
+                "settings.usage.detail.byDevice.header", defaultValue: "By device", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text(UsageDetailFormat.shareCaption)
@@ -522,36 +522,36 @@ struct UsageGatewayDetailView: View {
             UsageValueRow(
                 label: LocalizedStringResource(
                     "settings.usage.detail.imageHistory.added",
-                    defaultValue: "Turns you attached images to"),
-                value: context.turnsWithImages.formatted(.number),
+                    defaultValue: "Turns you attached images to", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
+                value: context.turnsWithImages.formatted(.number.locale(AppLocalization.locale)),
                 icon: "photo",
                 iconTint: AppColors.usageIconBlue
             )
             UsageValueRow(
                 label: LocalizedStringResource(
                     "settings.usage.detail.imageHistory.replayed",
-                    defaultValue: "Earlier images sent again"),
-                value: context.replayedImageTotal.formatted(.number),
+                    defaultValue: "Earlier images sent again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
+                value: context.replayedImageTotal.formatted(.number.locale(AppLocalization.locale)),
                 caption: LocalizedStringResource(
                     "settings.usage.detail.imageHistory.replayed.caption",
                     defaultValue: """
                         An image counts again each time it is included with a \
                         later turn.
-                        """),
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 icon: "arrow.triangle.2.circlepath",
                 iconTint: AppColors.usageIconBlue
             )
         } header: {
             Text(LocalizedStringResource(
                 "settings.usage.detail.imageHistory.header",
-                defaultValue: "Image history"))
+                defaultValue: "Image history", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.usage.detail.imageHistory.footer.v2",
                 defaultValue: """
                     Conduck re-sends some earlier images so your AI can \
                     still see them.
-                    """))
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 }
@@ -628,17 +628,17 @@ enum UsageDetailRows {
         accessibility: LocalizedStringResource
     ) -> some View {
         Text(LocalizedStringResource(
-            "settings.usage.reliability.details", defaultValue: "Details"))
+            "settings.usage.reliability.details", defaultValue: "Details", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.subheadline)
             .foregroundStyle(AppColors.textPrimary)
             .accessibilityLabel(Text(accessibility))
     }
 
     /// The two VoiceOver names, one per card that owns a disclosure.
-    static let reliabilityDetailsAccessibility = LocalizedStringResource(
-        "settings.usage.reliability.details.a11y", defaultValue: "Reliability details")
-    static let tokenDetailsAccessibility = LocalizedStringResource(
-        "settings.usage.tokens.details.a11y", defaultValue: "Token details")
+    static var reliabilityDetailsAccessibility: LocalizedStringResource { LocalizedStringResource(
+        "settings.usage.reliability.details.a11y", defaultValue: "Reliability details", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
+    static var tokenDetailsAccessibility: LocalizedStringResource { LocalizedStringResource(
+        "settings.usage.tokens.details.a11y", defaultValue: "Token details", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// The reliability upgrades, in the order they answer "did it work": how
     /// often the first try landed, how often a retry rescued a turn that did
@@ -650,13 +650,13 @@ enum UsageDetailRows {
     static func reliability(_ summary: GatewayUsageSummary) -> some View {
         UsageValueRow(
             label: LocalizedStringResource(
-                "settings.usage.detail.firstTry", defaultValue: "Delivered first try"),
+                "settings.usage.detail.firstTry", defaultValue: "Delivered first try", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             value: UsageDetailFormat.percentText(
                 GatewayUsageAggregator.ratio(
                     summary.firstAttemptDeliveredTurns, summary.resolvedTurns)),
             caption: LocalizedStringResource(
                 "settings.usage.detail.firstTry.caption",
-                defaultValue: "\(summary.firstAttemptDeliveredTurns) of \(summary.resolvedTurns) finished turns")
+                defaultValue: "\(summary.firstAttemptDeliveredTurns) of \(summary.resolvedTurns) finished turns", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         )
         // RESOLVED retried turns, never the wider `retriedTurns`: a turn still
         // being retried has not failed to recover, and the wider population
@@ -664,19 +664,19 @@ enum UsageDetailRows {
         if summary.resolvedRetriedTurns > 0 {
             UsageValueRow(
                 label: LocalizedStringResource(
-                    "settings.usage.detail.recovered", defaultValue: "Recovered by retry"),
+                    "settings.usage.detail.recovered", defaultValue: "Recovered by retry", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 value: UsageDetailFormat.percentText(
                     GatewayUsageAggregator.ratio(
                         summary.retriedTurnsRecovered, summary.resolvedRetriedTurns)),
                 caption: LocalizedStringResource(
                     "settings.usage.detail.recovered.caption",
-                    defaultValue: "\(summary.retriedTurnsRecovered) of \(summary.resolvedRetriedTurns) retried turns")
+                    defaultValue: "\(summary.retriedTurnsRecovered) of \(summary.resolvedRetriedTurns) retried turns", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
         }
         UsageValueRow(
             label: LocalizedStringResource(
                 "settings.usage.reliability.attemptsPerTurn",
-                defaultValue: "Attempts per completed turn"),
+                defaultValue: "Attempts per completed turn", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             value: UsageDetailFormat.decimalText(summary.attemptsPerCompletedTurn)
         )
     }
@@ -699,7 +699,7 @@ enum UsageDetailRows {
         ForEach(reasons.prefix(failureReasonRowLimit), id: \.appErrorCode) { reason in
             UsageValueRow(
                 verbatimLabel: UsageFailureReasonCopy.label(forAppErrorCode: reason.appErrorCode),
-                value: reason.count.formatted(.number),
+                value: reason.count.formatted(.number.locale(AppLocalization.locale)),
                 icon: "exclamationmark.triangle",
                 route: gateway.map {
                     .incidents(UsageIncidentFilter(
@@ -710,8 +710,8 @@ enum UsageDetailRows {
         if otherFailureCount(reasons) > 0 {
             UsageValueRow(
                 label: LocalizedStringResource(
-                    "settings.usage.detail.failureReason.other", defaultValue: "Other"),
-                value: otherFailureCount(reasons).formatted(.number),
+                    "settings.usage.detail.failureReason.other", defaultValue: "Other", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
+                value: otherFailureCount(reasons).formatted(.number.locale(AppLocalization.locale)),
                 icon: "exclamationmark.triangle"
             )
         }
@@ -736,29 +736,29 @@ enum UsageDetailRows {
     static func tokensHeadline(_ tokens: GatewayUsageTokens) -> some View {
         if let total = tokens.reportedTotal.sum {
             UsageHeadlineRow(
-                value: total.formatted(.number),
+                value: total.formatted(.number.locale(AppLocalization.locale)),
                 label: LocalizedStringResource(
                     "settings.usage.tokens.coverage",
-                    defaultValue: "Reported on \(UsageDetailFormat.percentText(tokens.reportedTotal.coverage)) of attempts"),
+                    defaultValue: "Reported on \(UsageDetailFormat.percentText(tokens.reportedTotal.coverage)) of attempts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.tokens.headline.total.a11y",
                     defaultValue: """
-                        \(total.formatted(.number)) tokens, reported on \
+                        \(total.formatted(.number.locale(AppLocalization.locale))) tokens, reported on \
                         \(UsageDetailFormat.percentText(tokens.reportedTotal.coverage)) of attempts
-                        """)
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
         } else if let components = tokens.calculatedKnownComponents {
             UsageHeadlineRow(
-                value: components.formatted(.number),
+                value: components.formatted(.number.locale(AppLocalization.locale)),
                 label: LocalizedStringResource(
                     "settings.usage.tokens.headline.components",
-                    defaultValue: "Input + output added up — your gateway reported no total"),
+                    defaultValue: "Input + output added up — your gateway reported no total", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 accessibility: LocalizedStringResource(
                     "settings.usage.tokens.headline.components.a11y",
                     defaultValue: """
-                        \(components.formatted(.number)) tokens, input and output \
+                        \(components.formatted(.number.locale(AppLocalization.locale))) tokens, input and output \
                         added up — your gateway reported no total
-                        """)
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             )
         }
     }
@@ -789,11 +789,11 @@ enum UsageDetailRows {
             detailDisclosure(expanded: expanded, accessibility: tokenDetailsAccessibility) {
                 tokenRow(
                     label: LocalizedStringResource(
-                        "settings.usage.tokens.input", defaultValue: "Input"),
+                        "settings.usage.tokens.input", defaultValue: "Input", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     field: tokens.input)
                 tokenRow(
                     label: LocalizedStringResource(
-                        "settings.usage.tokens.output", defaultValue: "Output"),
+                        "settings.usage.tokens.output", defaultValue: "Output", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     field: tokens.output)
                 // Always rowed, reported or not, exactly as the two above: an
                 // explicit "Not reported" tells the reader the gateway stayed
@@ -802,23 +802,23 @@ enum UsageDetailRows {
                 // (whole range or one gateway).
                 tokenRow(
                     label: LocalizedStringResource(
-                        "settings.usage.tokens.cachedInput", defaultValue: "Cached input"),
+                        "settings.usage.tokens.cachedInput", defaultValue: "Cached input", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     field: tokens.cachedInput)
                 tokenRow(
                     label: LocalizedStringResource(
-                        "settings.usage.tokens.cacheWrites", defaultValue: "Cache writes"),
+                        "settings.usage.tokens.cacheWrites", defaultValue: "Cache writes", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     field: tokens.cacheWriteInput)
                 tokenRow(
                     label: LocalizedStringResource(
                         "settings.usage.tokens.reasoningOutput",
-                        defaultValue: "Reasoning output"),
+                        defaultValue: "Reasoning output", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     field: tokens.reasoningOutput)
                 Text(LocalizedStringResource(
                     "settings.usage.tokens.detail.footer",
                     defaultValue: """
                         These are parts of the input and output figures above, counted \
                         only where your gateway reported them.
-                        """))
+                        """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -833,13 +833,13 @@ enum UsageDetailRows {
     ) -> some View {
         UsageValueRow(
             label: label,
-            value: field.sum.map { $0.formatted(.number) }
+            value: field.sum.map { $0.formatted(.number.locale(AppLocalization.locale)) }
                 ?? String(localized: "settings.usage.tokens.absent",
-                          defaultValue: "Not reported"),
+                          defaultValue: "Not reported", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             caption: field.isReported && field.coverage != nil
                 ? LocalizedStringResource(
                     "settings.usage.tokens.coverage",
-                    defaultValue: "Reported on \(UsageDetailFormat.percentText(field.coverage)) of attempts")
+                    defaultValue: "Reported on \(UsageDetailFormat.percentText(field.coverage)) of attempts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 : nil
         )
     }
@@ -1072,7 +1072,7 @@ struct UsageShareLabel: View {
             .foregroundStyle(AppColors.textSecondary)
             .accessibilityLabel(Text(verbatim: String(
                 localized: "settings.usage.share.a11y",
-                defaultValue: "\(share) of attempts")))
+                defaultValue: "\(share) of attempts", bundle: AppLocalization.bundle, locale: AppLocalization.locale)))
     }
 }
 
@@ -1136,7 +1136,7 @@ enum UsageGatewayLabel {
     static func name(for key: String?, roster: [CustomGateway]) -> String {
         guard let key else {
             return String(localized: "settings.usage.gateway.unattributed",
-                          defaultValue: "Not recorded")
+                          defaultValue: "Not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         guard let ref = RemoteAgentRef(rawString: key) else { return key }
         if case .custom(let id) = ref, !roster.contains(where: { $0.id == id }) {
@@ -1155,17 +1155,17 @@ enum UsageDeviceBucketDisplay {
     static func label(_ bucket: UsageDeviceBucket) -> String {
         switch bucket {
         case .iphone:
-            return String(localized: "settings.usage.device.iphone", defaultValue: "iPhone")
+            return String(localized: "settings.usage.device.iphone", defaultValue: "iPhone", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .ipad:
-            return String(localized: "settings.usage.device.ipad", defaultValue: "iPad")
+            return String(localized: "settings.usage.device.ipad", defaultValue: "iPad", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .mac:
-            return String(localized: "settings.usage.device.mac", defaultValue: "Mac")
+            return String(localized: "settings.usage.device.mac", defaultValue: "Mac", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .watch:
-            return String(localized: "settings.usage.device.watch", defaultValue: "Apple Watch")
+            return String(localized: "settings.usage.device.watch", defaultValue: "Apple Watch", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .carPlay:
-            return String(localized: "settings.usage.device.carPlay", defaultValue: "CarPlay")
+            return String(localized: "settings.usage.device.carPlay", defaultValue: "CarPlay", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unknown:
-            return String(localized: "settings.usage.device.unknown", defaultValue: "Not recorded")
+            return String(localized: "settings.usage.device.unknown", defaultValue: "Not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -1220,12 +1220,12 @@ enum UsageDetailFormat {
     /// which is a different claim from "none succeeded".
     static func percentText(_ value: Double?) -> String {
         guard let value else { return unavailable }
-        return value.formatted(.percent.precision(.fractionLength(0)))
+        return value.formatted(.percent.precision(.fractionLength(0)).locale(AppLocalization.locale))
     }
 
     static func decimalText(_ value: Double?) -> String {
         guard let value else { return unavailable }
-        return value.formatted(.number.precision(.fractionLength(1)))
+        return value.formatted(.number.precision(.fractionLength(1)).locale(AppLocalization.locale))
     }
 
     static func durationText(_ seconds: TimeInterval?) -> String {
@@ -1235,15 +1235,15 @@ enum UsageDetailFormat {
         if seconds < 60 {
             return Duration.seconds(seconds).formatted(
                 .units(allowed: [.seconds], width: .narrow, fractionalPart: .show(length: 1))
-            )
+            .locale(AppLocalization.locale))
         }
         return Duration.seconds(seconds).formatted(
             .units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2)
-        )
+        .locale(AppLocalization.locale))
     }
 
     static var unavailable: String {
-        String(localized: "settings.usage.unavailable", defaultValue: "—")
+        String(localized: "settings.usage.unavailable", defaultValue: "—", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Two keys rather than one plural rule: the headless build path that
@@ -1251,9 +1251,9 @@ enum UsageDetailFormat {
     /// count-driven variation would have to be hand-written into it.
     static func attemptsText(_ count: Int) -> String {
         count == 1
-            ? String(localized: "settings.usage.attempts.one", defaultValue: "1 attempt")
+            ? String(localized: "settings.usage.attempts.one", defaultValue: "1 attempt", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : String(localized: "settings.usage.attempts.other",
-                     defaultValue: "\(count) attempts")
+                     defaultValue: "\(count) attempts", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// How many replies are behind the figures, and the window they fall in —
@@ -1265,7 +1265,7 @@ enum UsageDetailFormat {
     /// is read by most people as a typo rather than as a caveat.
     static func sampleCaption(count: Int, range: UsageDashboardModel.Range) -> String {
         String(localized: "settings.usage.detail.sampleCaption",
-               defaultValue: "\(repliesMeasuredText(count)) · \(rangeWindowText(range))")
+               defaultValue: "\(repliesMeasuredText(count)) · \(rangeWindowText(range))", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Two keys rather than one plural rule, for the reason `attemptsText`
@@ -1274,9 +1274,9 @@ enum UsageDetailFormat {
     static func repliesMeasuredText(_ count: Int) -> String {
         count == 1
             ? String(localized: "settings.usage.detail.repliesMeasured.one",
-                     defaultValue: "1 reply measured")
+                     defaultValue: "1 reply measured", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : String(localized: "settings.usage.detail.repliesMeasured.other",
-                     defaultValue: "\(count) replies measured")
+                     defaultValue: "\(count) replies measured", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The window a drill-down's figures fall in, stated beside them — the
@@ -1284,23 +1284,23 @@ enum UsageDetailFormat {
     /// still names the window the data is of.
     static func rangeCaption(for range: UsageDashboardModel.Range) -> String {
         String(localized: "settings.usage.detail.rangeCaption",
-               defaultValue: "Showing \(rangeWindowText(range))")
+               defaultValue: "Showing \(rangeWindowText(range))", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     static func rangeWindowText(_ range: UsageDashboardModel.Range) -> String {
         switch range {
         case .week:
             return String(localized: "settings.usage.rangeCaption.week",
-                          defaultValue: "last \(UsageDashboardModel.Range.weekDays) days")
+                          defaultValue: "last \(UsageDashboardModel.Range.weekDays) days", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .month:
             return String(localized: "settings.usage.rangeCaption.month",
-                          defaultValue: "last \(UsageDashboardModel.Range.monthDays) days")
+                          defaultValue: "last \(UsageDashboardModel.Range.monthDays) days", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .quarter:
             return String(localized: "settings.usage.rangeCaption.quarter",
-                          defaultValue: "last \(UsageDashboardModel.Range.quarterDays) days")
+                          defaultValue: "last \(UsageDashboardModel.Range.quarterDays) days", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .all:
             return String(localized: "settings.usage.rangeCaption.all",
-                          defaultValue: "all time")
+                          defaultValue: "all time", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 
@@ -1308,11 +1308,11 @@ enum UsageDetailFormat {
     /// older record that never captured the requested model.
     static func modelLabel(for key: String?) -> String {
         key ?? String(localized: "settings.usage.model.default",
-                      defaultValue: "Default / not recorded")
+                      defaultValue: "Default / not recorded", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
-    static let shareCaption = LocalizedStringResource(
-        "settings.usage.share.caption", defaultValue: "Share of recorded attempts")
+    static var shareCaption: LocalizedStringResource { LocalizedStringResource(
+        "settings.usage.share.caption", defaultValue: "Share of recorded attempts", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     /// Compact breakdowns show volume. Success rates, timing samples and token
     /// coverage belong to their dedicated cards, whose denominators differ.
@@ -1320,7 +1320,7 @@ enum UsageDetailFormat {
         var parts = [attemptsText(group.attempts)]
         if group.failed > 0 {
             parts.append(String(localized: "settings.usage.group.failed",
-                                defaultValue: "\(group.failed) failed"))
+                                defaultValue: "\(group.failed) failed", bundle: AppLocalization.bundle, locale: AppLocalization.locale))
         }
         return parts.joined(separator: " · ")
     }
@@ -1337,11 +1337,11 @@ enum UsageDetailFormat {
         let rounded = (ratio * 100).rounded()
         if rounded < 1 {
             return String(localized: "settings.usage.share.trace",
-                          defaultValue: "<\(percentText(0.01))")
+                          defaultValue: "<\(percentText(0.01))", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         if rounded > 99 {
             return String(localized: "settings.usage.share.nearAll",
-                          defaultValue: ">\(percentText(0.99))")
+                          defaultValue: ">\(percentText(0.99))", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return percentText(ratio)
     }
@@ -1353,12 +1353,12 @@ enum UsageDetailFormat {
     /// saying why.
     static func unattributedDeviceFooter(_ missing: Int, of total: Int) -> String {
         String(localized: "settings.usage.byDevice.footer.unattributed",
-               defaultValue: "Device was not recorded on \(missing) of \(total) attempts.")
+               defaultValue: "Device was not recorded on \(missing) of \(total) attempts.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     static func unattributedGatewayFooter(_ missing: Int, of total: Int) -> String {
         String(localized: "settings.usage.byGateway.footer.unattributed",
-               defaultValue: "Gateway was not recorded on \(missing) of \(total) attempts.")
+               defaultValue: "Gateway was not recorded on \(missing) of \(total) attempts.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// The ranking basis, named honestly. ONE basis per list: a list mixing
@@ -1372,14 +1372,14 @@ enum UsageDetailFormat {
                 defaultValue: """
                     Largest turns are ranked by the total your gateway reported. \
                     Turns it reported no total for aren't ranked.
-                    """)
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .calculatedComponents:
             return LocalizedStringResource(
                 "settings.usage.detail.turnBasis.components",
                 defaultValue: """
                     Largest turns are ranked by input plus output, added up from \
                     what your gateway reported — it reported no totals of its own.
-                    """)
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -1392,14 +1392,14 @@ enum UsageDetailFormat {
                 defaultValue: """
                     Ranked by gateway-reported total tokens. Conversations without \
                     reported totals aren't ranked.
-                    """)
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .calculatedComponents:
             return LocalizedStringResource(
                 "settings.usage.detail.threadBasis.components",
                 defaultValue: """
                     Ranked by input plus output, added up from what your gateway \
                     reported — it reported no totals of its own.
-                    """)
+                    """, locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }

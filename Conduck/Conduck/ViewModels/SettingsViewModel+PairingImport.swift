@@ -491,7 +491,7 @@ extension SettingsViewModel {
         // so the copy says that — same treatment `.committedGatewayOnly` gets.
         let storageIncomplete = PairingGatewayTestOutcome.failed(
             message: String(localized: "settings.pairing.error.saveNotReadable",
-                            defaultValue: "This gateway didn't save completely. Re-run the import to set it up again."),
+                            defaultValue: "This gateway didn't save completely. Re-run the import to set it up again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             error: .remoteAgentNotConfigured
         )
         guard let url = await SettingsManager.shared.getRemoteAgentURL(for: target) else {
@@ -562,7 +562,7 @@ extension SettingsViewModel {
         } catch {
             // No typed error behind this copy, so no terminality claim either —
             // the sheet keeps its retry, because unknown is not terminal.
-            return .failed(message: String(localized: "Unexpected error. Try again."),
+            return .failed(message: String(localized: "Unexpected error. Try again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                            error: nil)
         }
     }

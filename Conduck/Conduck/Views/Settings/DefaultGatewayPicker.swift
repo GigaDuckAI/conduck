@@ -109,7 +109,7 @@ struct DefaultGatewaySelectorRow: View {
                 Text(LocalizedStringResource(
                     "settings.personalAI.default.selector.label",
                     defaultValue: "Default for new chats"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textPrimary)
             } icon: {
                 Image(systemName: "brain.head.profile")
@@ -157,14 +157,14 @@ struct DefaultGatewayPicker: View {
     var needsDefaultChoice: Bool = false
 
     private var navTitle: LocalizedStringResource {
-        LocalizedStringResource("settings.personalAI.default.picker.title", defaultValue: "Default for new chats")
+        LocalizedStringResource("settings.personalAI.default.picker.title", defaultValue: "Default for new chats", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     private var footer: LocalizedStringResource {
         LocalizedStringResource(
             "settings.personalAI.default.picker.footer",
             defaultValue: "New chats start here until you use a different gateway, then they follow that one. Existing chats keep the one they started on."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// The only rows this screen may offer: gateways that can send from here.
@@ -221,7 +221,7 @@ struct DefaultGatewayPicker: View {
                         title: LocalizedStringResource(
                             "settings.personalAI.default.picker.unavailable.title",
                             defaultValue: "\(defaultUnavailableName) isn't available here"
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         // The Watch chooser pins a gateway for the WRIST, not the
                         // default for new chats here, so it gets the sentence that
                         // is true of it. `onFollowPhone` is that screen's existing
@@ -230,11 +230,11 @@ struct DefaultGatewayPicker: View {
                             ? LocalizedStringResource(
                                 "settings.personalAI.default.picker.unavailable.body",
                                 defaultValue: "It's still your default, and it'll work again on its own if it's just waiting on iCloud. To use a different gateway for new chats on this device, pick one below."
-                            )
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                             : LocalizedStringResource(
                                 "settings.personalAI.default.picker.unavailable.watch.body",
                                 defaultValue: "It's still the gateway your Apple Watch is pinned to, and it'll work again on its own if it's just waiting on iCloud. To pin a different one, pick it below."
-                            )
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     )
                     .settingsCardPassiveRow()
                 }
@@ -245,11 +245,11 @@ struct DefaultGatewayPicker: View {
                         title: LocalizedStringResource(
                             "settings.personalAI.default.picker.noChoice.title",
                             defaultValue: "No default yet"
-                        ),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         message: LocalizedStringResource(
                             "settings.personalAI.default.picker.noChoice.body",
                             defaultValue: "Pick a gateway below and new chats will start on it."
-                        )
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                     )
                     .settingsCardPassiveRow()
                 }
@@ -268,7 +268,7 @@ struct DefaultGatewayPicker: View {
                             Text(LocalizedStringResource(
                                 "settings.watch.default.followPhone",
                                 defaultValue: "Follow iPhone"
-                            ))
+                            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .foregroundStyle(AppColors.textPrimary)
                             Spacer()
                         }
@@ -288,7 +288,7 @@ struct DefaultGatewayPicker: View {
                     Text(LocalizedStringResource(
                         "settings.personalAI.default.picker.empty",
                         defaultValue: "No gateways are set up on this device yet. Connect one in Personal AI and it'll appear here."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -320,7 +320,7 @@ struct DefaultGatewayPicker: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.hostedModels.header",
                         defaultValue: "Hosted models"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 } footer: {
                     Text(footer)
                 }
@@ -340,7 +340,7 @@ struct DefaultGatewayPicker: View {
                     Text(LocalizedStringResource(
                         "settings.remoteAgent.hostedModels.header",
                         defaultValue: "Hosted models"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 } footer: {
                     Text(footer)
                 }
@@ -396,7 +396,7 @@ struct DefaultGatewayPicker: View {
                     Text(LocalizedStringResource(
                         "settings.personalAI.hostedBadge",
                         defaultValue: "Hosted"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                 }

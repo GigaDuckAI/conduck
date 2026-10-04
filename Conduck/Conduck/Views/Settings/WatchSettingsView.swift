@@ -73,7 +73,7 @@ struct WatchSettingsView: View {
         .navigationTitle(Text(LocalizedStringResource(
             "settings.watch.section.title",
             defaultValue: "Apple Watch"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         .navigationBarTitleDisplayMode(.inline)
         .task {
             watchReadRepliesAloud = await SettingsManager.shared.getWatchReadRepliesAloud()
@@ -129,12 +129,12 @@ struct WatchSettingsView: View {
             }
             .buttonStyle(.plain)
         } header: {
-            Text(LocalizedStringResource("settings.voice.summary.header", defaultValue: "Active"))
+            Text(LocalizedStringResource("settings.voice.summary.header", defaultValue: "Active", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.watch.default.footer",
                 defaultValue: "Your Apple Watch follows the iPhone's default gateway unless you pick a specific one here."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -179,24 +179,24 @@ struct WatchSettingsView: View {
                 set: { newValue in Task { await viewModel.setWatchSessionPolicyOverride(newValue) } }
             )
             Picker(selection: selection) {
-                Text(LocalizedStringResource("settings.watch.sessionPolicy.followPhone", defaultValue: "Follow iPhone"))
+                Text(LocalizedStringResource("settings.watch.sessionPolicy.followPhone", defaultValue: "Follow iPhone", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .tag(SessionContinuationPolicy?.none)
                 ForEach(SessionContinuationPolicy.allCases.reversed()) { policy in
                     Text(policy.label).tag(SessionContinuationPolicy?.some(policy))
                 }
             } label: {
-                Text(LocalizedStringResource("settings.watch.sessionPolicy.label", defaultValue: "Add to last conversation"))
+                Text(LocalizedStringResource("settings.watch.sessionPolicy.label", defaultValue: "Add to last conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .foregroundStyle(AppColors.textPrimary)
             }
             .pickerStyle(.menu)
             .tint(AppColors.brandAmber)
         } header: {
-            Text(LocalizedStringResource("settings.watch.sessionPolicy.header", defaultValue: "Action Button & Control Center"))
+            Text(LocalizedStringResource("settings.watch.sessionPolicy.header", defaultValue: "Action Button & Control Center", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.watch.sessionPolicy.footer",
                 defaultValue: "Applies to asks from the Action Button or Control Center on this Apple Watch. Follow iPhone uses your iPhone's setting."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -220,7 +220,7 @@ struct WatchSettingsView: View {
                 Text(LocalizedStringResource(
                     "settings.watch.readAloud.toggle",
                     defaultValue: "Speak replies aloud"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textPrimary)
             }
             .tint(AppColors.brandAmber)
@@ -228,12 +228,12 @@ struct WatchSettingsView: View {
             Text(LocalizedStringResource(
                 "settings.watch.readAloud.header",
                 defaultValue: "Spoken Replies"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.watch.readAloud.footer",
                 defaultValue: "Replies to anything you ask on Apple Watch — using the Action Button, Control Center, or the Ask button — are spoken aloud on your wrist."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -254,7 +254,7 @@ struct WatchSettingsView: View {
                     Text(LocalizedStringResource(
                         "settings.watch.setup.title",
                         defaultValue: "Set up Apple Watch"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.title3)
                     .fontWeight(.medium)
                     .foregroundStyle(.tint)
@@ -267,7 +267,7 @@ struct WatchSettingsView: View {
                 .padding(.vertical, 4)
             }
         } header: {
-            Text(LocalizedStringResource("settings.watch.setup.header", defaultValue: "Setup"))
+            Text(LocalizedStringResource("settings.watch.setup.header", defaultValue: "Setup", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -287,7 +287,7 @@ struct WatchSettingsView: View {
                 Text(LocalizedStringResource(
                     "settings.watch.sync.button",
                     defaultValue: "Send Settings to Apple Watch"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .foregroundStyle(AppColors.textPrimary)
             }
             .buttonStyle(.plain)
@@ -303,12 +303,12 @@ struct WatchSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(AppColors.textSecondary)
         } header: {
-            Text(LocalizedStringResource("settings.watch.sync.header", defaultValue: "Sync"))
+            Text(LocalizedStringResource("settings.watch.sync.header", defaultValue: "Sync", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         } footer: {
             Text(LocalizedStringResource(
                 "settings.watch.sync.footer",
                 defaultValue: "Queues your current provider, key, and gateway settings for delivery. Delivery happens in the background, even when the Watch is out of reach — it completes the next time your Apple Watch is available."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -320,22 +320,22 @@ struct WatchSettingsView: View {
             LocalizedStringResource(
                 "settings.watch.sync.result.queued",
                 defaultValue: "Settings queued for delivery to your Apple Watch."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .activationPending:
             LocalizedStringResource(
                 "settings.watch.sync.result.activationPending",
                 defaultValue: "The Apple Watch connection is still starting up — try again in a moment."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .notPaired:
             LocalizedStringResource(
                 "settings.watch.sync.result.notPaired",
                 defaultValue: "No Apple Watch is paired with this iPhone."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .watchAppNotInstalled:
             LocalizedStringResource(
                 "settings.watch.sync.result.notInstalled",
                 defaultValue: "Conduck isn't installed on your Apple Watch."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -347,14 +347,14 @@ struct WatchSettingsView: View {
             return LocalizedStringResource(
                 "settings.watch.sync.lastTransfer.none",
                 defaultValue: "No completed settings transfer recorded yet."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         let when = Date(timeIntervalSinceReferenceDate: lastTransferStamp)
-            .formatted(.relative(presentation: .named))
+            .formatted(.relative(presentation: .named).locale(AppLocalization.locale))
         return LocalizedStringResource(
             "settings.watch.sync.lastTransfer",
             defaultValue: "Last settings transfer completed \(when)."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// Read the last-success stamp from the App-Group suite. 0 when absent.

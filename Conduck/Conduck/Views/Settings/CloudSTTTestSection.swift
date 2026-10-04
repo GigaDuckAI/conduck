@@ -43,7 +43,7 @@ struct CloudSTTTestSection: View {
         switch viewModel.cloudSTTTester.state {
         case .idle:
             recordButton(label: LocalizedStringResource(
-                "settings.voice.cloudTest.record", defaultValue: "Record a test"))
+                "settings.voice.cloudTest.record", defaultValue: "Record a test", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         case .recording(let startedAt):
             recordingControls(startedAt: startedAt)
         case .transcribing:
@@ -85,7 +85,7 @@ struct CloudSTTTestSection: View {
                 Task { await viewModel.cloudSTTTester.stop() }
             } label: {
                 Label(
-                    LocalizedStringResource("settings.voice.cloudTest.stop", defaultValue: "Stop"),
+                    LocalizedStringResource("settings.voice.cloudTest.stop", defaultValue: "Stop", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "stop.fill"
                 )
                 .font(.subheadline.weight(.semibold))
@@ -100,7 +100,7 @@ struct CloudSTTTestSection: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(LocalizedStringResource(
-                    "settings.voice.cloudTest.heard", defaultValue: "Heard"))
+                    "settings.voice.cloudTest.heard", defaultValue: "Heard", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.textTertiary)
                 Text(verbatim: "“\(text)”")
@@ -110,7 +110,7 @@ struct CloudSTTTestSection: View {
                     .textSelection(.enabled)
             }
             recordButton(label: LocalizedStringResource(
-                "settings.voice.cloudTest.recordAgain", defaultValue: "Record again"))
+                "settings.voice.cloudTest.recordAgain", defaultValue: "Record again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -127,7 +127,7 @@ struct CloudSTTTestSection: View {
                     .multilineTextAlignment(.leading)
             }
             recordButton(label: LocalizedStringResource(
-                "settings.voice.cloudTest.recordAgain", defaultValue: "Record again"))
+                "settings.voice.cloudTest.recordAgain", defaultValue: "Record again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 }

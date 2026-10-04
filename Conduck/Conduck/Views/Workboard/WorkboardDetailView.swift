@@ -25,10 +25,10 @@ struct WorkboardDetailView: View {
 
     /// The desk is titled by the workspace it is, never by the row behind it:
     /// the desk record carries no title or objective for anything to display.
-    private static let deskTitle = LocalizedStringResource(
+    private static var deskTitle: LocalizedStringResource { LocalizedStringResource(
         "workboard.title",
         defaultValue: "Work"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
     var body: some View {
         WorkDeskWorkspaceView(viewModel: viewModel, item: desk.item, workspace: viewModel.deskWorkspace)

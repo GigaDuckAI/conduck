@@ -33,7 +33,7 @@ enum RemoteAgentRefMetadata {
     /// a deleted, forgotten or not-yet-synced roster entry. One definition, so
     /// "no name we can show" reads identically whether the entry is missing
     /// outright or present only as a retired badge.
-    static var genericCustomName: String { String(localized: "Custom gateway") }
+    static var genericCustomName: String { String(localized: "Custom gateway", bundle: AppLocalization.bundle, locale: AppLocalization.locale) }
 
     /// The user-facing gateway name. Built-in → its `displayName`; custom →
     /// its roster `name` (falls back to a generic label if the roster entry

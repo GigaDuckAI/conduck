@@ -157,7 +157,7 @@ enum WorkboardAudioCardChip: Equatable, Sendable {
             return LocalizedStringResource(
                 "workboard.material.localOnly",
                 defaultValue: "Available on this device"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .syncPending:
             return ContentSyncPresentationPolicy.missingFileSummary(
                 enabled: ContentSyncPresentationSnapshot.shared.isEnabled
@@ -166,12 +166,12 @@ enum WorkboardAudioCardChip: Equatable, Sendable {
             return LocalizedStringResource(
                 "workboard.material.reattach.short",
                 defaultValue: "Reattach"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .notOnThisDevice:
             return LocalizedStringResource(
                 "workboard.audio.unavailableHere",
                 defaultValue: "Not on this device"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 }
@@ -804,14 +804,14 @@ struct WorkboardAudioTransport: View {
     static func actionTitle(for phase: WorkboardAudioPhase) -> LocalizedStringResource {
         switch WorkboardAudioCardPresentation.transportAction(for: phase) {
         case .play:
-            return LocalizedStringResource("workboard.audio.play", defaultValue: "Play")
+            return LocalizedStringResource("workboard.audio.play", defaultValue: "Play", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .pause:
-            return LocalizedStringResource("workboard.audio.pause", defaultValue: "Pause")
+            return LocalizedStringResource("workboard.audio.pause", defaultValue: "Pause", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .cancelLoading:
             return LocalizedStringResource(
                 "workboard.audio.cancelLoading",
                 defaultValue: "Cancel Loading"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -835,21 +835,21 @@ struct WorkboardAudioTransport: View {
         case .idle:
             return nil
         case .loading:
-            return LocalizedStringResource("workboard.audio.loading", defaultValue: "Loading")
+            return LocalizedStringResource("workboard.audio.loading", defaultValue: "Loading", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .playing:
-            return LocalizedStringResource("workboard.audio.playing", defaultValue: "Playing")
+            return LocalizedStringResource("workboard.audio.playing", defaultValue: "Playing", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .paused:
-            return LocalizedStringResource("workboard.audio.paused", defaultValue: "Paused")
+            return LocalizedStringResource("workboard.audio.paused", defaultValue: "Paused", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .failed:
             return LocalizedStringResource(
                 "workboard.audio.failed",
                 defaultValue: "This recording couldn’t be played"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .blocked:
             return LocalizedStringResource(
                 "workboard.audio.busy",
                 defaultValue: "Audio is in use right now"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -859,7 +859,7 @@ struct WorkboardAudioTransport: View {
             String(localized: LocalizedStringResource(
                 "workboard.audio.position",
                 defaultValue: "%1$@ of %2$@"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             WorkboardAudioTiming.label(elapsed),
             WorkboardAudioTiming.label(duration)
         )
@@ -1116,7 +1116,7 @@ struct WorkboardAudioCardView: View {
             Text(LocalizedStringResource(
                 "workboard.audio.failed",
                 defaultValue: "This recording couldn’t be played"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             .font(.caption)
             .foregroundStyle(AppColors.warning)
             .lineLimit(2)
@@ -1168,7 +1168,7 @@ struct WorkboardAudioCardView: View {
         LocalizedStringResource(
             "workboard.audio.busy",
             defaultValue: "Audio is in use right now"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// The demoted row. A recording's length is deliberately absent: nothing
@@ -1275,7 +1275,7 @@ struct WorkboardAudioCardView: View {
         .help(String(localized: LocalizedStringResource(
             "workboard.material.card.more",
             defaultValue: "Card actions"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     @ViewBuilder
@@ -1288,7 +1288,7 @@ struct WorkboardAudioCardView: View {
         if showsOpenAction {
             Button(action: openDetails) {
                 Label(
-                    LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
+                    LocalizedStringResource("workboard.material.open", defaultValue: "Open", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "arrow.up.forward.app"
                 )
             }
@@ -1296,7 +1296,7 @@ struct WorkboardAudioCardView: View {
         if let shareAction {
             Button(action: shareAction) {
                 Label(
-                    LocalizedStringResource("workboard.material.share", defaultValue: "Share"),
+                    LocalizedStringResource("workboard.material.share", defaultValue: "Share", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "square.and.arrow.up"
                 )
             }
@@ -1307,7 +1307,7 @@ struct WorkboardAudioCardView: View {
                     LocalizedStringResource(
                         "workboard.material.reattach.action",
                         defaultValue: "Reattach or Replace"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "paperclip"
                 )
             }
@@ -1317,7 +1317,7 @@ struct WorkboardAudioCardView: View {
             if let onMoveEarlier {
                 Button(action: onMoveEarlier) {
                     Label(
-                        LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"),
+                        LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "arrow.left"
                     )
                 }
@@ -1325,7 +1325,7 @@ struct WorkboardAudioCardView: View {
             if let onMoveLater {
                 Button(action: onMoveLater) {
                     Label(
-                        LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later"),
+                        LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "arrow.right"
                     )
                 }
@@ -1338,7 +1338,7 @@ struct WorkboardAudioCardView: View {
                     LocalizedStringResource(
                         "workboard.material.remove.action",
                         defaultValue: "Remove Material"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "trash"
                 )
             }
@@ -1349,7 +1349,7 @@ struct WorkboardAudioCardView: View {
     private var cardAccessibilityActions: some View {
         if showsOpenAction {
             Button(
-                LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
+                LocalizedStringResource("workboard.material.open", defaultValue: "Open", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: openDetails
             )
         }
@@ -1357,7 +1357,7 @@ struct WorkboardAudioCardView: View {
         // person here or not at all.
         if let shareAction {
             Button(
-                LocalizedStringResource("workboard.material.share", defaultValue: "Share"),
+                LocalizedStringResource("workboard.material.share", defaultValue: "Share", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: shareAction
             )
         }
@@ -1368,19 +1368,19 @@ struct WorkboardAudioCardView: View {
                 LocalizedStringResource(
                     "workboard.material.reattach.action",
                     defaultValue: "Reattach or Replace"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: onReattach
             )
         }
         if let onMoveEarlier {
             Button(
-                LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"),
+                LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: onMoveEarlier
             )
         }
         if let onMoveLater {
             Button(
-                LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later"),
+                LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: onMoveLater
             )
         }
@@ -1389,7 +1389,7 @@ struct WorkboardAudioCardView: View {
                 LocalizedStringResource(
                     "workboard.material.remove.action",
                     defaultValue: "Remove Material"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: onRemove
             )
         }
@@ -1454,22 +1454,22 @@ struct WorkboardAudioCardView: View {
             parts.append(String(localized: LocalizedStringResource(
                 "workboard.audio.loading",
                 defaultValue: "Loading"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .playing:
             parts.append(String(localized: LocalizedStringResource(
                 "workboard.audio.playing",
                 defaultValue: "Playing"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .paused:
             parts.append(String(localized: LocalizedStringResource(
                 "workboard.audio.paused",
                 defaultValue: "Paused"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .failed:
             parts.append(String(localized: LocalizedStringResource(
                 "workboard.audio.failed",
                 defaultValue: "This recording couldn’t be played"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         case .blocked:
             parts.append(String(localized: busyCopy))
         case .idle:
@@ -1494,7 +1494,7 @@ struct WorkboardAudioCardView: View {
             String(localized: LocalizedStringResource(
                 "workboard.material.card.position",
                 defaultValue: "%1$lld of %2$lld"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             position,
             count
         )

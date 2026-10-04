@@ -436,8 +436,8 @@ struct ConversationThreadView: View {
                         Image(systemName: didCopyAll ? "checkmark" : "doc.on.doc")
                     }
                     .accessibilityLabel(Text(didCopyAll
-                        ? LocalizedStringResource("thread.copyAll.copied", defaultValue: "Copied")
-                        : LocalizedStringResource("thread.copyAll.button", defaultValue: "Copy conversation")))
+                        ? LocalizedStringResource("thread.copyAll.copied", defaultValue: "Copied", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("thread.copyAll.button", defaultValue: "Copy conversation", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                     .accessibilityIdentifier("toolbar.copyConversation")
                 }
             }
@@ -957,7 +957,7 @@ struct ConversationThreadView: View {
         VStack(spacing: 6) {
             Text(LocalizedStringResource(
                 "thread.hiddenPhotos.banner",
-                defaultValue: "Earlier photos are hidden from this gateway in this chat."))
+                defaultValue: "Earlier photos are hidden from this gateway in this chat.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption)
                 .foregroundStyle(AppColors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -965,7 +965,7 @@ struct ConversationThreadView: View {
                 Task { await viewModel.disableHideEarlierPhotos() }
             } label: {
                 Text(LocalizedStringResource(
-                    "thread.hiddenPhotos.tryAgain", defaultValue: "Try photos again"))
+                    "thread.hiddenPhotos.tryAgain", defaultValue: "Try photos again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.brandAmber)
             }
@@ -992,7 +992,7 @@ struct ConversationThreadView: View {
         VStack(spacing: 6) {
             Text(LocalizedStringResource(
                 "thread.voiceRefused.banner",
-                defaultValue: "Read aloud in the built-in voice."))
+                defaultValue: "Read aloud in the built-in voice.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppColors.textSecondary)
             // No ref: this is a VOICE endpoint's refusal, not the gateway's,
@@ -1006,7 +1006,7 @@ struct ConversationThreadView: View {
                 voiceRefusal = nil
             } label: {
                 Text(LocalizedStringResource(
-                    "thread.voiceRefused.dismiss", defaultValue: "Dismiss"))
+                    "thread.voiceRefused.dismiss", defaultValue: "Dismiss", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.brandAmber)
             }
@@ -1097,7 +1097,7 @@ struct ConversationThreadView: View {
                         // explanation; gate the clone behind a reveal.
                         Text(String(
                             format: String(localized: "thread.gatewayLock.body",
-                                           defaultValue: "This chat stays on %@ to keep context consistent. To use another gateway, clone it — the original stays here unchanged, and your history reaches the new gateway only when you continue there."),
+                                           defaultValue: "This chat stays on %@ to keep context consistent. To use another gateway, clone it — the original stays here unchanged, and your history reaches the new gateway only when you continue there.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                             viewModel.backendDisplayName
                         ))
                             .font(.callout)
@@ -1116,7 +1116,7 @@ struct ConversationThreadView: View {
                         // forward; show the targets directly, no reveal gate.
                         Text(String(
                             format: String(localized: "thread.gatewayGone.body",
-                                           defaultValue: "Gateway '%@' is no longer available. This conversation stays readable; clone it to keep going on another gateway."),
+                                           defaultValue: "Gateway '%@' is no longer available. This conversation stays readable; clone it to keep going on another gateway.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                             viewModel.backendDisplayName
                         ))
                             .font(.callout)
@@ -1129,13 +1129,13 @@ struct ConversationThreadView: View {
                 }
                 .padding(20)
             }
-            .navigationTitle(Text(LocalizedStringResource("thread.gatewayLock.title", defaultValue: "Gateway")))
+            .navigationTitle(Text(LocalizedStringResource("thread.gatewayLock.title", defaultValue: "Gateway", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(LocalizedStringResource("thread.gatewayLock.done", defaultValue: "Done")) {
+                    Button(LocalizedStringResource("thread.gatewayLock.done", defaultValue: "Done", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                         viewModel.showingGatewaySheet = false
                     }
                 }
@@ -1161,22 +1161,22 @@ struct ConversationThreadView: View {
             ) { ref in
                 Button(LocalizedStringResource(
                     "thread.clone.sendLast.send", defaultValue: "Send now"
-                )) {
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     cloneTo(ref, continueImmediately: true)
                 }
                 Button(LocalizedStringResource(
                     "thread.clone.sendLast.later", defaultValue: "Just clone"
-                )) {
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                     cloneTo(ref, continueImmediately: false)
                 }
                 Button(LocalizedStringResource(
                     "thread.clone.sendLast.cancel", defaultValue: "Cancel"
-                ), role: .cancel) { }
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) { }
             } message: { _ in
                 Text(LocalizedStringResource(
                     "thread.clone.sendLast.body",
                     defaultValue: "Your last message hasn't been answered yet. If you just clone, it stays in the chat and goes along with your next message."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -1189,11 +1189,11 @@ struct ConversationThreadView: View {
     private var cloneSendPromptTitle: String {
         guard let ref = pendingCloneTarget else {
             return String(localized: "thread.clone.sendLast.title.generic",
-                          defaultValue: "Send the last message there?")
+                          defaultValue: "Send the last message there?", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         return String(
             format: String(localized: "thread.clone.sendLast.title",
-                           defaultValue: "Send the last message on %@?"),
+                           defaultValue: "Send the last message on %@?", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             RemoteAgentRefMetadata.displayName(for: ref, customs: viewModel.customGateways)
         )
     }
@@ -1205,7 +1205,7 @@ struct ConversationThreadView: View {
             Text(LocalizedStringResource(
                 "thread.gatewayLock.cloneHeader",
                 defaultValue: "Clone & continue on"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppColors.textPrimary)
             ForEach(otherRefs, id: \.self) { ref in
@@ -1230,7 +1230,7 @@ struct ConversationThreadView: View {
                 Text(LocalizedStringResource(
                     "thread.gatewayLock.cloneReveal",
                     defaultValue: "Clone to another gateway…"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.body)
                     .foregroundStyle(AppColors.textPrimary)
                 Spacer()
@@ -1284,7 +1284,7 @@ struct ConversationThreadView: View {
         .choiceCardButton(cornerRadius: 10)
         .accessibilityLabel(String(
             format: String(localized: "thread.gatewayLock.cloneAction",
-                           defaultValue: "Clone & continue on %@"),
+                           defaultValue: "Clone & continue on %@", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             name
         ))
     }
@@ -1296,7 +1296,7 @@ struct ConversationThreadView: View {
             Label(
                 String(
                     format: String(localized: "thread.gatewayGone.banner",
-                                   defaultValue: "Gateway '%@' is no longer available."),
+                                   defaultValue: "Gateway '%@' is no longer available.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     viewModel.backendDisplayName
                 ),
                 systemImage: "exclamationmark.triangle.fill"
@@ -1312,7 +1312,7 @@ struct ConversationThreadView: View {
                     Text(LocalizedStringResource(
                         "thread.gatewayGone.cloneCTA",
                         defaultValue: "Clone & continue on another gateway"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
                 }
@@ -1436,7 +1436,7 @@ struct ConversationThreadView: View {
                         userInfo: [NotificationDeepLink.workItemIDKey: itemID.uuidString]
                     )
                 } label: {
-                    Text(LocalizedStringResource("workboard.chatCapture.open", defaultValue: "Open Work"))
+                    Text(LocalizedStringResource("workboard.chatCapture.open", defaultValue: "Open Work", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 10)
                         .frame(minHeight: 36)
@@ -1452,7 +1452,7 @@ struct ConversationThreadView: View {
                 accessibilityLabel: Text(LocalizedStringResource(
                     "common.dismiss",
                     defaultValue: "Dismiss"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             ) {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
                     workCaptureNotice = nil
@@ -1553,12 +1553,12 @@ struct MessageWorkCaptureNotice: Identifiable, Equatable {
                 ? String(
                     localized: "workboard.chatCapture.partial.one",
                     defaultValue: "Added to Work. One attachment needs another try."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 : String.localizedStringWithFormat(
                     String(
                         localized: "workboard.chatCapture.partial",
                         defaultValue: "Added to Work. %lld attachments need another try."
-                    ),
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     Int64(receipt.failedMaterialCount)
                 )
         } else if receipt.refusedMaterialCount > 0 {
@@ -1571,24 +1571,24 @@ struct MessageWorkCaptureNotice: Identifiable, Equatable {
             detail = String(
                 localized: "workboard.chatCapture.recordingRefused",
                 defaultValue: "Added to Work without the recording. Add recordings yourself with the attachment button in Work."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         } else if receipt.referencedOnlyMaterialCount > 0 {
             detail = receipt.referencedOnlyMaterialCount == 1
                 ? String(
                     localized: "workboard.chatCapture.remote.one",
                     defaultValue: "Added to Work. One gateway file remains available from the original chat."
-                )
+                , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                 : String.localizedStringWithFormat(
                     String(
                         localized: "workboard.chatCapture.remote",
                         defaultValue: "Added to Work. %lld gateway files remain available from the original chat."
-                    ),
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     Int64(receipt.referencedOnlyMaterialCount)
                 )
         } else {
             detail = receipt.wasAlreadyCaptured
-                ? String(localized: "workboard.chatCapture.already", defaultValue: "This message is already in Work.")
-                : String(localized: "workboard.chatCapture.saved", defaultValue: "Added to Work. Nothing was sent.")
+                ? String(localized: "workboard.chatCapture.already", defaultValue: "This message is already in Work.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                : String(localized: "workboard.chatCapture.saved", defaultValue: "Added to Work. Nothing was sent.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         self.init(itemID: receipt.itemID, message: detail, isError: false)
     }
@@ -1991,7 +1991,7 @@ private struct MessageBubble: View, Equatable {
                     Button(action: onRetry) {
                         HStack(spacing: 3) {
                             Image(systemName: "arrow.clockwise")
-                            Text(LocalizedStringResource("declinedTurn.action.tryAgain", defaultValue: "Try again"))
+                            Text(LocalizedStringResource("declinedTurn.action.tryAgain", defaultValue: "Try again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.error)
@@ -2000,7 +2000,7 @@ private struct MessageBubble: View, Equatable {
                 }
                 if allowsNewAttempts && presentation.offersResendWithoutPhoto {
                     Button(action: onResendWithoutPhoto) {
-                        Text(LocalizedStringResource("declinedTurn.action.resendWithoutPhoto", defaultValue: "Resend without photo"))
+                        Text(LocalizedStringResource("declinedTurn.action.resendWithoutPhoto", defaultValue: "Resend without photo", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.brandAmber)
                     }
@@ -2008,7 +2008,7 @@ private struct MessageBubble: View, Equatable {
                 }
                 if allowsNewAttempts && presentation.offersKeepChattingWithoutPhotos {
                     Button(action: onKeepChattingWithoutPhotos) {
-                        Text(LocalizedStringResource("declinedTurn.action.keepChatting", defaultValue: "Keep chatting without photos"))
+                        Text(LocalizedStringResource("declinedTurn.action.keepChatting", defaultValue: "Keep chatting without photos", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.brandAmber)
                     }
@@ -2113,7 +2113,7 @@ private struct MessageBubble: View, Equatable {
                         .foregroundStyle(AppColors.warning)
                     Text(LocalizedStringResource(
                         "thread.outputs.heldBack.title",
-                        defaultValue: "Not everything came back"))
+                        defaultValue: "Not everything came back", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.textSecondary)
                 }
@@ -2163,7 +2163,7 @@ private struct MessageBubble: View, Equatable {
                 if claimed > 0 {
                     Text(LocalizedStringResource(
                         "thread.outputs.heldBack.type",
-                        defaultValue: "The folder held ^[\(claimed) file](inflect: true) Conduck doesn't open on its own."))
+                        defaultValue: "The folder held ^[\(claimed) file](inflect: true) Conduck doesn't open on its own.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2198,7 +2198,7 @@ private struct MessageBubble: View, Equatable {
                         outcome, stillRefused: rescues.count) {
                         Text(LocalizedStringResource(
                             "thread.outputs.heldBack.type.capped",
-                            defaultValue: "Review lists the first ^[\(rescues.count) file](inflect: true)."))
+                            defaultValue: "Review lists the first ^[\(rescues.count) file](inflect: true).", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption2)
                             .foregroundStyle(AppColors.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -2231,7 +2231,7 @@ private struct MessageBubble: View, Equatable {
                    !OutputHeldBackCopy.allowlistWidened(outcome, stillRefused: rescues.count) {
                     Text(LocalizedStringResource(
                         "thread.outputs.heldBack.type.unnamed",
-                        defaultValue: "There's nothing here to review — Conduck doesn't have the names for what it left in the folder. It's all still on your file server."))
+                        defaultValue: "There's nothing here to review — Conduck doesn't have the names for what it left in the folder. It's all still on your file server.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption2)
                         .foregroundStyle(AppColors.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2338,10 +2338,10 @@ private struct MessageBubble: View, Equatable {
                         Text(rescues.count == 1
                             ? LocalizedStringResource(
                                 "thread.outputs.heldBack.action.one",
-                                defaultValue: "Review file…")
+                                defaultValue: "Review file…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                             : LocalizedStringResource(
                                 "thread.outputs.heldBack.action.many",
-                                defaultValue: "Review files…"))
+                                defaultValue: "Review files…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.brandAmber)
                     }
@@ -2354,7 +2354,7 @@ private struct MessageBubble: View, Equatable {
                             .tint(AppColors.textTertiary)
                         Text(LocalizedStringResource(
                             "thread.outputs.checking",
-                            defaultValue: "Checking…"))
+                            defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.textTertiary)
                     }
@@ -2364,7 +2364,7 @@ private struct MessageBubble: View, Equatable {
                             Image(systemName: "arrow.clockwise")
                             Text(LocalizedStringResource(
                                 "thread.outputs.action.checkAgainShort",
-                                defaultValue: "Check again"))
+                                defaultValue: "Check again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
@@ -2402,7 +2402,7 @@ private struct MessageBubble: View, Equatable {
                     .foregroundStyle(AppColors.textTertiary)
                 Text(LocalizedStringResource(
                     "thread.outputs.fault.title",
-                    defaultValue: "Couldn't read your file server"))
+                    defaultValue: "Couldn't read your file server", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -2417,7 +2417,7 @@ private struct MessageBubble: View, Equatable {
             // anything was put there at all.
             Text(LocalizedStringResource(
                 "thread.outputs.fault.body",
-                defaultValue: "Conduck couldn't check whether this reply returned any files. It only ever reads that folder, so anything your agent put there is untouched."))
+                defaultValue: "Conduck couldn't check whether this reply returned any files. It only ever reads that folder, so anything your agent put there is untouched.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
                 .multilineTextAlignment(.leading)
@@ -2430,7 +2430,7 @@ private struct MessageBubble: View, Equatable {
                             .tint(AppColors.textTertiary)
                         Text(LocalizedStringResource(
                             "thread.outputs.checking",
-                            defaultValue: "Checking…"))
+                            defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.textTertiary)
                     }
@@ -2441,7 +2441,7 @@ private struct MessageBubble: View, Equatable {
                                 Image(systemName: "arrow.clockwise")
                                 Text(LocalizedStringResource(
                                     "thread.outputs.action.checkAgainShort",
-                                    defaultValue: "Check again"))
+                                    defaultValue: "Check again", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             }
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.brandAmber)
@@ -2457,7 +2457,7 @@ private struct MessageBubble: View, Equatable {
                         Button(action: onSearchMentionedFiles) {
                             Text(LocalizedStringResource(
                                 "thread.outputs.action.searchMentionedShort",
-                                defaultValue: "Search mentioned files"))
+                                defaultValue: "Search mentioned files", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(AppColors.brandAmber)
                         }
@@ -2467,7 +2467,7 @@ private struct MessageBubble: View, Equatable {
                 Button(action: onOpenFileSetup) {
                     Text(LocalizedStringResource(
                         "thread.outputs.action.reviewSetup",
-                        defaultValue: "Review file setup"))
+                        defaultValue: "Review file setup", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
                 }
@@ -2560,7 +2560,7 @@ private struct MessageBubble: View, Equatable {
                     .foregroundStyle(AppColors.textTertiary)
                 Text(LocalizedStringResource(
                     "thread.outputs.noFolder.title",
-                    defaultValue: "No folder for this reply"))
+                    defaultValue: "No folder for this reply", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -2573,7 +2573,7 @@ private struct MessageBubble: View, Equatable {
             // could ride back with the reply. The remedy sentence is unchanged.
             Text(LocalizedStringResource(
                 "thread.outputs.noFolder.body",
-                defaultValue: "Conduck couldn't confirm a fresh folder on your file server for this message, so it never told the agent where to put files and nothing could come back with the reply. Anything the agent wrote went to its own working folder — if the reply names a file, you can search for it. Check your file server, then send again."))
+                defaultValue: "Conduck couldn't confirm a fresh folder on your file server for this message, so it never told the agent where to put files and nothing could come back with the reply. Anything the agent wrote went to its own working folder — if the reply names a file, you can search for it. Check your file server, then send again.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(AppColors.textTertiary)
                 .multilineTextAlignment(.leading)
@@ -2586,7 +2586,7 @@ private struct MessageBubble: View, Equatable {
                             .tint(AppColors.textTertiary)
                         Text(LocalizedStringResource(
                             "thread.outputs.checking",
-                            defaultValue: "Checking…"))
+                            defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.textTertiary)
                     }
@@ -2594,7 +2594,7 @@ private struct MessageBubble: View, Equatable {
                     Button(action: onSearchMentionedFiles) {
                         Text(LocalizedStringResource(
                             "thread.outputs.action.searchMentionedShort",
-                            defaultValue: "Search mentioned files"))
+                            defaultValue: "Search mentioned files", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(AppColors.brandAmber)
                     }
@@ -2603,7 +2603,7 @@ private struct MessageBubble: View, Equatable {
                 Button(action: onOpenFileSetup) {
                     Text(LocalizedStringResource(
                         "thread.outputs.action.reviewSetup",
-                        defaultValue: "Review file setup"))
+                        defaultValue: "Review file setup", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
                 }
@@ -2647,7 +2647,7 @@ private struct MessageBubble: View, Equatable {
                     .tint(AppColors.textTertiary)
                 Text(LocalizedStringResource(
                     "thread.outputs.checking",
-                    defaultValue: "Checking…"))
+                    defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
             }
@@ -2724,12 +2724,12 @@ private struct MessageBubble: View, Equatable {
             // trailing playback/menu controls so it reads as playback metadata.
             if !isUser && usedFallbackVoice {
                 Text(LocalizedStringResource(
-                    "thread.speak.fallbackVoice", defaultValue: "Built-in voice"))
+                    "thread.speak.fallbackVoice", defaultValue: "Built-in voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(AppColors.textTertiary)
                     .accessibilityLabel(Text(LocalizedStringResource(
                         "thread.speak.fallbackVoice.a11y",
-                        defaultValue: "Spoken with the built-in voice")))
+                        defaultValue: "Spoken with the built-in voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             }
 
             // Speak: ASSISTANT bubbles only (agent replies). State-driven glyph
@@ -2784,13 +2784,13 @@ private struct MessageBubble: View, Equatable {
     private var speakAccessibilityLabel: LocalizedStringResource {
         switch speakState {
         case .idle:
-            return LocalizedStringResource("bubble.speak.aloud", defaultValue: "Speak aloud")
+            return LocalizedStringResource("bubble.speak.aloud", defaultValue: "Speak aloud", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .loading:
-            return LocalizedStringResource("bubble.speak.loading", defaultValue: "Loading")
+            return LocalizedStringResource("bubble.speak.loading", defaultValue: "Loading", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .playing:
-            return LocalizedStringResource("bubble.speak.pause", defaultValue: "Pause")
+            return LocalizedStringResource("bubble.speak.pause", defaultValue: "Pause", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .paused:
-            return LocalizedStringResource("bubble.speak.resume", defaultValue: "Resume")
+            return LocalizedStringResource("bubble.speak.resume", defaultValue: "Resume", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -2818,7 +2818,7 @@ private struct MessageBubble: View, Equatable {
                         .controlSize(.mini)
                         .tint(AppColors.background.opacity(0.8))
                         .accessibilityLabel(Text(LocalizedStringResource(
-                            "bubble.status.sending", defaultValue: "Sending")))
+                            "bubble.status.sending", defaultValue: "Sending", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
                 }
             default:
                 EmptyView()
@@ -2845,7 +2845,7 @@ private struct MessageBubble: View, Equatable {
     private func acknowledgeCopy() {
         AccessibilityAnnouncer.announce(String(localized: LocalizedStringResource(
             "bubble.copy.copied", defaultValue: "Copied"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { didCopy = true }
         Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -2907,7 +2907,7 @@ private struct InlineTextFileChip: View {
 
     private var name: String {
         attachment.filename ?? String(localized: LocalizedStringResource(
-            "attachment.file.untitled", defaultValue: "Attached file"))
+            "attachment.file.untitled", defaultValue: "Attached file", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The chip previews only when the sent bytes are locally present.
@@ -2939,10 +2939,10 @@ private struct InlineTextFileChip: View {
             format: String(localized: isPreviewable
                 ? LocalizedStringResource(
                     "attachment.file.preview.accessibility",
-                    defaultValue: "Preview attached file %@")
+                    defaultValue: "Preview attached file %@", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 : LocalizedStringResource(
                     "attachment.file.accessibility",
-                    defaultValue: "Attached file %@")),
+                    defaultValue: "Attached file %@", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             name
         )))
     }
@@ -2994,7 +2994,7 @@ private struct InlineTextFileChip: View {
                 filePreview.present(PreviewedFile(scratchItem: item), token: token)
             } catch {
                 failureMessage = String(localized: LocalizedStringResource(
-                    "fileTransfer.preview.failed", defaultValue: "Couldn't preview the file."))
+                    "fileTransfer.preview.failed", defaultValue: "Couldn't preview the file.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             }
         }
     }
@@ -3081,7 +3081,7 @@ private struct ServerFileDownloadChip: View {
 
     private var name: String {
         attachment.filename ?? String(localized: LocalizedStringResource(
-            "attachment.file.untitled", defaultValue: "Attached file"))
+            "attachment.file.untitled", defaultValue: "Attached file", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// Role-aware secondary tint (size label, spinner-adjacent text, Save As
@@ -3171,10 +3171,10 @@ private struct ServerFileDownloadChip: View {
                     format: String(localized: isAddressable
                         ? LocalizedStringResource(
                             "fileTransfer.preview.accessibility",
-                            defaultValue: "Download and preview file %@")
+                            defaultValue: "Download and preview file %@", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                         : LocalizedStringResource(
                             "fileTransfer.detachedReference.accessibility",
-                            defaultValue: "File %@, unavailable here")),
+                            defaultValue: "File %@, unavailable here", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                     name
                 ),
                 failureMessage
@@ -3212,13 +3212,13 @@ private struct ServerFileDownloadChip: View {
         // upload-side warning so a multi-hundred-MB transfer never starts silently.
         // Unknown size (byteSize == 0) never reaches this gate → downloads at once.
         .alert(
-            LocalizedStringResource("fileTransfer.download.softConfirm.title", defaultValue: "Download large file?"),
+            LocalizedStringResource("fileTransfer.download.softConfirm.title", defaultValue: "Download large file?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: $showingLargeDownloadConfirm
         ) {
-            Button(LocalizedStringResource("fileTransfer.download.softConfirm.download", defaultValue: "Download")) {
+            Button(LocalizedStringResource("fileTransfer.download.softConfirm.download", defaultValue: "Download", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 beginDownload(route: pendingRoute)
             }
-            Button(LocalizedStringResource("fileTransfer.softConfirm.cancel", defaultValue: "Cancel"), role: .cancel) {
+            Button(LocalizedStringResource("fileTransfer.softConfirm.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) {
                 pendingRoute = .preview
             }
         } message: {
@@ -3226,7 +3226,7 @@ private struct ServerFileDownloadChip: View {
                 format: String(localized: LocalizedStringResource(
                     "fileTransfer.download.softConfirm.message",
                     defaultValue: "%1$@ is %2$@ in size. Large files can take a while to download."
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 name,
                 AttachmentChipStyle.formattedSize(attachment.byteSize)
             ))
@@ -3262,7 +3262,7 @@ private struct ServerFileDownloadChip: View {
 
     #if os(macOS)
     private var saveAsTitle: String {
-        String(localized: LocalizedStringResource("fileTransfer.saveAs", defaultValue: "Save As…"))
+        String(localized: LocalizedStringResource("fileTransfer.saveAs", defaultValue: "Save As…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// Visible durable-save affordance — the Quick Look panel's share menu has
@@ -3285,10 +3285,10 @@ private struct ServerFileDownloadChip: View {
             format: String(localized: isAddressable
                 ? LocalizedStringResource(
                     "fileTransfer.saveAs.accessibility",
-                    defaultValue: "Save file %@")
+                    defaultValue: "Save file %@", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 : LocalizedStringResource(
                     "fileTransfer.detachedReference.accessibility",
-                    defaultValue: "File %@, unavailable here")),
+                    defaultValue: "File %@, unavailable here", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             name
         )))
     }
@@ -3298,7 +3298,7 @@ private struct ServerFileDownloadChip: View {
     private var downloadStateLabel: some View {
         switch state {
         case .downloading:
-            Text(LocalizedStringResource("fileTransfer.download.inProgress", defaultValue: "Downloading…"))
+            Text(LocalizedStringResource("fileTransfer.download.inProgress", defaultValue: "Downloading…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .font(.caption2)
                 .foregroundStyle(secondaryTint)
         case .failed(let message, _):
@@ -3318,7 +3318,7 @@ private struct ServerFileDownloadChip: View {
                 Text(LocalizedStringResource(
                     "fileTransfer.detachedReference",
                     defaultValue: "Unavailable here"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption2)
                     .foregroundStyle(secondaryTint)
             } else if let idleCaption {
@@ -3368,24 +3368,24 @@ private struct ServerFileDownloadChip: View {
             }
             let found = String(localized: LocalizedStringResource(
                 "fileTransfer.found.onFileServer",
-                defaultValue: "Found on your file server"))
+                defaultValue: "Found on your file server", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             guard let size else { return found }
             return String(
                 format: String(localized: LocalizedStringResource(
                     "fileTransfer.found.sizeOnFileServer",
-                    defaultValue: "%@ · found on your file server")),
+                    defaultValue: "%@ · found on your file server", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 size
             )
         }
         guard let size else {
             return String(localized: LocalizedStringResource(
                 "fileTransfer.sent.onFileServer",
-                defaultValue: "On your file server"))
+                defaultValue: "On your file server", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         return String(
             format: String(localized: LocalizedStringResource(
                 "fileTransfer.sent.sizeOnFileServer",
-                defaultValue: "%@ · on your file server")),
+                defaultValue: "%@ · on your file server", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             size
         )
     }
@@ -3524,17 +3524,17 @@ private struct ServerFileDownloadChip: View {
 
     private static var genericFailureMessage: String {
         String(localized: LocalizedStringResource(
-            "fileTransfer.download.failed", defaultValue: "Couldn't download the file."))
+            "fileTransfer.download.failed", defaultValue: "Couldn't download the file.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     private static var saveFailureMessage: String {
         String(localized: LocalizedStringResource(
-            "fileTransfer.save.failed", defaultValue: "Couldn't save the file."))
+            "fileTransfer.save.failed", defaultValue: "Couldn't save the file.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     private static var previewFailureMessage: String {
         String(localized: LocalizedStringResource(
-            "fileTransfer.preview.failed", defaultValue: "Couldn't preview the file."))
+            "fileTransfer.preview.failed", defaultValue: "Couldn't preview the file.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// Adopt the raw download into the scratch store (clean name +

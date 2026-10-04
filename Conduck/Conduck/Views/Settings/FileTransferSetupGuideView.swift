@@ -162,7 +162,7 @@ struct FileTransferSetupContent: View {
     }
 
     private var resolvedTitle: String {
-        titleOverride ?? String(localized: "fileTransfer.connected.header", defaultValue: "File transfer")
+        titleOverride ?? String(localized: "fileTransfer.connected.header", defaultValue: "File transfer", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Composer-only auto-dismiss eligibility: the lane is Ready AND the editor
@@ -245,7 +245,7 @@ struct FileTransferSetupContent: View {
             },
             suppressCancelOnExit: $suppressCancelOnExit,
             title: resolvedTitle,
-            saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save"),
+            saveTitle: LocalizedStringResource("settings.editor.save", defaultValue: "Save", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             // The only editor whose exit control varies, because it is the only
             // one with two presentations. From SETTINGS it is pushed under the
             // gateway editor → a chevron back to it. From the COMPOSER it is the
@@ -365,7 +365,7 @@ struct FileTransferSetupContent: View {
                 Text(LocalizedStringResource(
                     "fileTransfer.composer.escape",
                     defaultValue: "Not at your server right now? Close this and remove the file to send your message without it."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.footnote)
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -388,12 +388,12 @@ struct FileTransferSetupContent: View {
             return LocalizedStringResource(
                 "fileTransfer.manual.explanation.managed",
                 defaultValue: "Quick connect usually handles this. For manual setup, run an HTTPS WebDAV server on your gateway."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         } else {
             return LocalizedStringResource(
                 "fileTransfer.manual.explanation.custom.v2",
                 defaultValue: "Manual setup needs an agent with file tools and an HTTPS WebDAV server."
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -416,7 +416,7 @@ struct FileTransferSetupContent: View {
         LocalizedStringResource(
             "fileTransfer.manual.mechanism",
             defaultValue: "Files are uploaded here so the agent can open them with its tools."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     private var explanationSection: some View {
@@ -448,7 +448,7 @@ struct FileTransferSetupContent: View {
                 Text(LocalizedStringResource(
                     "fileTransfer.requirements.caption",
                     defaultValue: "Conduck can't verify these from this device."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
 
@@ -456,28 +456,28 @@ struct FileTransferSetupContent: View {
                     title: LocalizedStringResource(
                         "fileTransfer.requirements.workspace.title",
                         defaultValue: "Workspace"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     detail: workingFolderRequirement
                 )
                 requirementRow(
                     title: LocalizedStringResource(
                         "fileTransfer.requirements.reachability.title",
                         defaultValue: "Reachability"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     detail: LocalizedStringResource(
                         "fileTransfer.requirements.reachability.detail",
                         defaultValue: "Reachable anywhere you use this gateway."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
                 requirementRow(
                     title: LocalizedStringResource(
                         "fileTransfer.requirements.tools.title",
                         defaultValue: "Agent tools"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     detail: LocalizedStringResource(
                         "fileTransfer.requirements.tools.detail",
                         defaultValue: "Can read and write files."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
 
                 Link(destination: Constants.conduckConnectRepoURL) {
@@ -485,7 +485,7 @@ struct FileTransferSetupContent: View {
                         Text(LocalizedStringResource(
                             "fileTransfer.guide.docsLink",
                             defaultValue: "Setup help"
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         Image(systemName: "arrow.up.right")
                             .font(.caption)
                     }
@@ -503,7 +503,7 @@ struct FileTransferSetupContent: View {
             Text(LocalizedStringResource(
                 "fileTransfer.requirements.header",
                 defaultValue: "Also required"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 
@@ -540,12 +540,12 @@ struct FileTransferSetupContent: View {
                 return LocalizedStringResource(
                     "fileTransfer.requirements.workspace.hermes",
                     defaultValue: "Serves the folder configured as terminal.cwd."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .openclaw:
                 return LocalizedStringResource(
                     "fileTransfer.requirements.workspace.openclaw",
                     defaultValue: "Serves ~/.openclaw/workspace, unless you changed it."
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             case .openrouter:
                 break
             }
@@ -553,7 +553,7 @@ struct FileTransferSetupContent: View {
         return LocalizedStringResource(
             "fileTransfer.requirements.workspace.generic",
             defaultValue: "Serves the agent's working folder."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     // MARK: - Server credential (intent-gated, session-only)
@@ -562,7 +562,7 @@ struct FileTransferSetupContent: View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
                 groupLabel(
-                    LocalizedStringResource("fileTransfer.credential.header", defaultValue: "Server password"),
+                    LocalizedStringResource("fileTransfer.credential.header", defaultValue: "Server password", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     tip: GatewayFieldTips.fileServerPassword
                 )
                 // The helper says what to DO; what the password IS (and that
@@ -570,7 +570,7 @@ struct FileTransferSetupContent: View {
                 Text(LocalizedStringResource(
                     "fileTransfer.credential.helper.v3",
                     defaultValue: "Generate the password here, then give it to your file server — Quick connect does that for you."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -582,7 +582,7 @@ struct FileTransferSetupContent: View {
                     Text(LocalizedStringResource(
                         "fileTransfer.credential.savedHidden",
                         defaultValue: "Password saved. Generate a new one to view it."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -603,7 +603,7 @@ struct FileTransferSetupContent: View {
                         Text(LocalizedStringResource(
                             "fileTransfer.credential.writeFailed",
                             defaultValue: "Couldn't save the password to this device's Keychain. Try again."
-                        ))
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                             .font(.caption)
                             .foregroundStyle(AppColors.error)
                             .fixedSize(horizontal: false, vertical: true)
@@ -639,11 +639,11 @@ struct FileTransferSetupContent: View {
     private func credentialValueRows(_ secret: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             labeledMono(
-                label: LocalizedStringResource("fileTransfer.credential.userLabel", defaultValue: "Username"),
+                label: LocalizedStringResource("fileTransfer.credential.userLabel", defaultValue: "Username", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 value: "conduck"
             )
             HStack(spacing: 8) {
-                Text(LocalizedStringResource("fileTransfer.credential.passwordLabel", defaultValue: "Password"))
+                Text(LocalizedStringResource("fileTransfer.credential.passwordLabel", defaultValue: "Password", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
                 Spacer(minLength: 8)
@@ -666,8 +666,8 @@ struct FileTransferSetupContent: View {
                     withAnimation { revealCredential.toggle() }
                 } label: {
                     Text(revealCredential
-                        ? LocalizedStringResource("fileTransfer.credential.hide", defaultValue: "Hide")
-                        : LocalizedStringResource("fileTransfer.credential.reveal", defaultValue: "Reveal"))
+                        ? LocalizedStringResource("fileTransfer.credential.hide", defaultValue: "Hide", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("fileTransfer.credential.reveal", defaultValue: "Reveal", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(AppColors.brandAmber)
                 }
@@ -690,8 +690,8 @@ struct FileTransferSetupContent: View {
                 } label: {
                     Label(
                         didCopyCredential
-                            ? LocalizedStringResource("fileTransfer.credential.copied", defaultValue: "Copied")
-                            : LocalizedStringResource("fileTransfer.credential.copy", defaultValue: "Copy password"),
+                            ? LocalizedStringResource("fileTransfer.credential.copied", defaultValue: "Copied", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                            : LocalizedStringResource("fileTransfer.credential.copy", defaultValue: "Copy password", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: didCopyCredential ? "checkmark" : "doc.on.doc"
                     )
                     .font(.caption.weight(.semibold))
@@ -720,7 +720,7 @@ struct FileTransferSetupContent: View {
             mintCredential()
         } label: {
             Label(
-                LocalizedStringResource("fileTransfer.credential.generate", defaultValue: "Generate credential"),
+                LocalizedStringResource("fileTransfer.credential.generate", defaultValue: "Generate credential", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "key.horizontal"
             )
             .font(.subheadline.weight(.semibold))
@@ -734,7 +734,7 @@ struct FileTransferSetupContent: View {
             mintCredential()
         } label: {
             Label(
-                LocalizedStringResource("fileTransfer.credential.regenerate", defaultValue: "Regenerate credential"),
+                LocalizedStringResource("fileTransfer.credential.regenerate", defaultValue: "Regenerate credential", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "arrow.triangle.2.circlepath"
             )
             .font(.subheadline.weight(.semibold))
@@ -761,7 +761,7 @@ struct FileTransferSetupContent: View {
     private var urlGroup: some View {
         VStack(alignment: .leading, spacing: 8) {
             groupLabel(
-                LocalizedStringResource("fileTransfer.url.header", defaultValue: "File-server URL"),
+                LocalizedStringResource("fileTransfer.url.header", defaultValue: "File-server URL", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 tip: GatewayFieldTips.fileServerURL
             )
             urlField
@@ -774,7 +774,7 @@ struct FileTransferSetupContent: View {
                 Text(LocalizedStringResource(
                     "fileTransfer.url.footer.manual.v3",
                     defaultValue: "Paste the https:// address your file server is reachable at."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -798,7 +798,7 @@ struct FileTransferSetupContent: View {
         return String(localized: LocalizedStringResource(
             "settings.endpoint.plainHTTP.warning.v2",
             defaultValue: "Not encrypted — anyone on this network can read your messages and your key. Works only on this network — not in the car or out with the Watch."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     @ViewBuilder
@@ -816,7 +816,7 @@ struct FileTransferSetupContent: View {
             prompt: Text(LocalizedStringResource(
                 "fileTransfer.url.placeholder.v2",
                 defaultValue: "https://your-file-server.example:8444"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         )
             .labelsHidden()
             #if os(iOS)
@@ -871,15 +871,15 @@ struct FileTransferSetupContent: View {
                 ? LocalizedStringResource(
                     "fileTransfer.certificate.automaticSaveRequired",
                     defaultValue: "Automatic · Save required"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 : LocalizedStringResource(
                     "fileTransfer.certificate.pinnedSaveRequired",
                     defaultValue: "Pinned · Save required"
-                )
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return buffer.isEmpty
-            ? LocalizedStringResource("fileTransfer.certificate.automatic", defaultValue: "Automatic")
-            : LocalizedStringResource("fileTransfer.certificate.pinned", defaultValue: "Pinned on this device")
+            ? LocalizedStringResource("fileTransfer.certificate.automatic", defaultValue: "Automatic", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("fileTransfer.certificate.pinned", defaultValue: "Pinned on this device", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     static func pinComparisonForm(_ raw: String) -> String {
@@ -914,7 +914,7 @@ struct FileTransferSetupContent: View {
                 Text(LocalizedStringResource(
                     "fileTransfer.certificate.row",
                     defaultValue: "Server certificate"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textPrimary)
                     // The sibling ⓘ lays the row out at the 28pt pointer floor, so
@@ -1034,7 +1034,7 @@ struct FileTransferSetupContent: View {
                 Text(LocalizedStringResource(
                     "fileTransfer.test.needCredential",
                     defaultValue: "Generate a server password first."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.caption)
                     .foregroundStyle(AppColors.textTertiary)
             }
@@ -1067,12 +1067,12 @@ struct FileTransferSetupContent: View {
             return LocalizedStringResource(
                 "fileTransfer.connected.retest",
                 defaultValue: "Test again"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
         return LocalizedStringResource(
             "settings.fileTransfer.testConnection.button",
             defaultValue: "Test file server"
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// Spinner while running, green "Server test passed" on a full pass, or a red
@@ -1085,7 +1085,7 @@ struct FileTransferSetupContent: View {
         if testRunning {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(LocalizedStringResource("fileTransfer.inline.checking", defaultValue: "Checking…"))
+                Text(LocalizedStringResource("fileTransfer.inline.checking", defaultValue: "Checking…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSecondary)
             }
@@ -1102,7 +1102,7 @@ struct FileTransferSetupContent: View {
                         .foregroundStyle(AppColors.warning)
                     Text(LocalizedStringResource(
                         "fileTransfer.inline.listingUnchecked",
-                        defaultValue: "Sending files works. Conduck couldn't check whether files can come back — try the test again."))
+                        defaultValue: "Sending files works. Conduck couldn't check whether files can come back — try the test again.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSecondary)
                         .multilineTextAlignment(.leading)
@@ -1119,7 +1119,7 @@ struct FileTransferSetupContent: View {
                         .foregroundStyle(AppColors.warning)
                     Text(LocalizedStringResource(
                         "fileTransfer.inline.uploadOnly",
-                        defaultValue: "Sending files works. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server."))
+                        defaultValue: "Sending files works. This server can't list folders, so files the agent creates won't come back on their own — you'll still find them on the server.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSecondary)
                         .multilineTextAlignment(.leading)
@@ -1128,7 +1128,7 @@ struct FileTransferSetupContent: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(AppColors.success)
-                    Text(LocalizedStringResource("fileTransfer.inline.fileServerReady", defaultValue: "Server test passed"))
+                    Text(LocalizedStringResource("fileTransfer.inline.fileServerReady", defaultValue: "Server test passed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSecondary)
                 }
@@ -1152,7 +1152,7 @@ struct FileTransferSetupContent: View {
         if let failure = test?.failure {
             return Text(verbatim: failure.descriptionWithRecovery(for: ref))
         }
-        return Text(LocalizedStringResource("fileTransfer.inline.failed", defaultValue: "Test failed"))
+        return Text(LocalizedStringResource("fileTransfer.inline.failed", defaultValue: "Test failed", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     // MARK: - Forget
@@ -1174,7 +1174,7 @@ struct FileTransferSetupContent: View {
         } label: {
             #if os(macOS)
             Label(
-                LocalizedStringResource("fileTransfer.forget.button", defaultValue: "Forget file transfer"),
+                LocalizedStringResource("fileTransfer.forget.button", defaultValue: "Forget file transfer", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 systemImage: "trash"
             )
             .font(.subheadline)
@@ -1182,7 +1182,7 @@ struct FileTransferSetupContent: View {
             HStack {
                 Spacer()
                 Label(
-                    LocalizedStringResource("fileTransfer.forget.button", defaultValue: "Forget file transfer"),
+                    LocalizedStringResource("fileTransfer.forget.button", defaultValue: "Forget file transfer", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "trash"
                 )
                 .font(.subheadline)
@@ -1197,24 +1197,24 @@ struct FileTransferSetupContent: View {
         #endif
         .foregroundStyle(AppColors.error)
         .alert(
-            LocalizedStringResource("fileTransfer.forget.alert.title", defaultValue: "Forget file transfer?"),
+            LocalizedStringResource("fileTransfer.forget.alert.title", defaultValue: "Forget file transfer?", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: $showingForgetConfirm
         ) {
             Button(
-                LocalizedStringResource("fileTransfer.forget.alert.confirm", defaultValue: "Forget"),
+                LocalizedStringResource("fileTransfer.forget.alert.confirm", defaultValue: "Forget", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .destructive
             ) {
                 Task { await viewModel.clearFileTransferConfig(for: ref) }
             }
             Button(
-                LocalizedStringResource("fileTransfer.forget.alert.cancel", defaultValue: "Cancel"),
+                LocalizedStringResource("fileTransfer.forget.alert.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) { }
         } message: {
             Text(LocalizedStringResource(
                 "fileTransfer.forget.alert.message",
                 defaultValue: "Conduck will erase the file-server URL, the generated credential, and the pin for this gateway. The files already on your server stay where they are."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
     }
 

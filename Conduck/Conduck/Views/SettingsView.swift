@@ -198,7 +198,7 @@ struct SettingsView: View {
         Section {
             NavigationLink(value: Category.general) {
                 summaryRow(
-                    title: LocalizedStringResource("settings.general.section.title", defaultValue: "General"),
+                    title: LocalizedStringResource("settings.general.section.title", defaultValue: "General", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "gearshape",
                     status: Text(viewModel.generalSummaryShort)
                 )
@@ -206,7 +206,7 @@ struct SettingsView: View {
 
             NavigationLink(value: Category.personalAI) {
                 summaryRow(
-                    title: LocalizedStringResource("settings.remoteAgent.section.title", defaultValue: "Personal AI"),
+                    title: LocalizedStringResource("settings.remoteAgent.section.title", defaultValue: "Personal AI", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "brain.head.profile",
                     status: personalAIStatus
                 )
@@ -214,7 +214,7 @@ struct SettingsView: View {
 
             NavigationLink(value: Category.voice) {
                 summaryRow(
-                    title: LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice"),
+                    title: LocalizedStringResource("settings.voice.detail.title", defaultValue: "Voice", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "waveform",
                     status: Text(viewModel.voiceSummaryShort)
                 )
@@ -339,7 +339,7 @@ struct SettingsView: View {
                 DiagnosticsView()
             } label: {
                 Label {
-                    Text(LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics"))
+                    Text(LocalizedStringResource("diagnostics.title", defaultValue: "Diagnostics", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                         .foregroundStyle(Color.primary)
                 } icon: {
                     Image(systemName: "stethoscope")
@@ -392,7 +392,7 @@ struct SettingsView: View {
                 } label: {
                     setupCardLabel(
                         systemImage: "applewatch",
-                        title: Text(LocalizedStringResource("settings.watch.section.title", defaultValue: "Apple Watch")),
+                        title: Text(LocalizedStringResource("settings.watch.section.title", defaultValue: "Apple Watch", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                         subtitle: Text("Talk to your AI from your wrist") // xcstrings: setup-guide
                     )
                 }
@@ -520,7 +520,7 @@ private struct AboutDetailView: View {
                 } label: {
                     Label(
                         LocalizedStringResource("settings.about.licenses.title",
-                                                defaultValue: "Open Source Licenses"),
+                                                defaultValue: "Open Source Licenses", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "doc.plaintext"
                     )
                     .foregroundStyle(Color.primary)
@@ -543,7 +543,7 @@ private struct AboutDetailView: View {
         .sheet(isPresented: $showingMailComposer) {
             MailComposerView(
                 recipient: Constants.feedbackEmail,
-                subject: String(localized: "Conduck Feedback"), // xcstrings
+                subject: String(localized: "Conduck Feedback", bundle: AppLocalization.bundle, locale: AppLocalization.locale), // xcstrings
                 body: feedbackEmailBody()
             )
         }

@@ -502,10 +502,10 @@ enum ConversationActivityCopy {
             return ThinkingIndicator.label(phase: phase, backendName: gatewayName)
         case .hedged:
             return String(localized: "activity.waitingForReply",
-                          defaultValue: "Waiting for a reply…")  // xcstrings: chat-ui
+                          defaultValue: "Waiting for a reply…", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         case .stale:
             return String(localized: "activity.noReplyYet",
-                          defaultValue: "No reply yet")  // xcstrings: chat-ui
+                          defaultValue: "No reply yet", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
         }
     }
 
@@ -514,7 +514,7 @@ enum ConversationActivityCopy {
     /// is deliberately NOT "No reply" — in a list that reads as "hasn't
     /// answered yet", the opposite of the truth.
     static var notSent: String {
-        String(localized: "activity.notSent", defaultValue: "Not sent")  // xcstrings: chat-ui
+        String(localized: "activity.notSent", defaultValue: "Not sent", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 
     /// Coarse elapsed for a list row: nil below 60 s, whole minutes above,
@@ -529,7 +529,7 @@ enum ConversationActivityCopy {
                 width: .abbreviated,
                 maximumUnitCount: 2,
                 zeroValueUnits: .hide
-            )
+            ).locale(AppLocalization.locale)
         )
     }
 }

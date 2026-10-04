@@ -67,12 +67,12 @@ extension SettingsViewModel {
         String(
             localized: "settings.voice.apple.voice.unavailable.mac",
             defaultValue: "This voice didn't play. Download it again in System Settings → Accessibility → Read & Speak (the info button next to System Voice), then click it here to try again, or pick another. Replies use the system voice until then."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         #else
         String(
             localized: "settings.voice.apple.voice.unavailable.ios",
             defaultValue: "This voice didn't play. Download it again in Settings → Accessibility → Read & Speak → Voices, then tap it here to try again, or pick another. Replies use the system voice until then."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         #endif
     }
 }

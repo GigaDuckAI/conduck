@@ -1129,9 +1129,9 @@ final class AppleRelayPendingQueue {
     /// `ReplySanitizer.displayLine` rather than replaced.)
     private func postTranscriptNotification() {
         let content = UNMutableNotificationContent()
-        content.title = String(localized: "Conduck")
+        content.title = String(localized: "Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // xcstrings
-        content.body = String(localized: "Transcription complete. Sending to your AI.")
+        content.body = String(localized: "Transcription complete. Sending to your AI.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         content.sound = .default
         let req = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -1204,7 +1204,7 @@ final class AppleRelayPendingQueue {
         // that stops the wrong-device sentence from arriving if one ever does.
         case .sttKeyUnreadable:
             // xcstrings
-            return String(localized: "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again.")
+            return String(localized: "Your iPhone couldn't read its STT API key. Unlock your iPhone and record again.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         default:
             // Cause-only ON PURPOSE, and NOT an instance of the cause-without-
             // remedy defect: this queue's reachable payloads
@@ -1246,20 +1246,20 @@ final class AppleRelayPendingQueue {
             body = String(
                 localized: "watch.work.notification.saved",
                 defaultValue: "Saved to Work."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .workRecordingOnly:
             body = String(
                 localized: "watch.work.notification.savedWithoutWords",
                 defaultValue: "Kept on your iPhone. Nothing reaches Work until the words land."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .workWordsOnly:
             body = String(
                 localized: "watch.work.notification.wordsOnly",
                 defaultValue: "Saved the words to Work. Update Conduck on your iPhone to keep recordings."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
         let content = UNMutableNotificationContent()
-        content.title = String(localized: "Conduck")
+        content.title = String(localized: "Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         content.body = body
         content.sound = .default
         let req = UNNotificationRequest(
@@ -1272,10 +1272,10 @@ final class AppleRelayPendingQueue {
 
     private func postErrorNotification(error: AppError) {
         let content = UNMutableNotificationContent()
-        content.title = String(localized: "Conduck")
+        content.title = String(localized: "Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         content.body = Self.notificationBody(
             for: error,
-            fallback: String(localized: "Could not process response.")
+            fallback: String(localized: "Could not process response.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         )
         content.sound = .default
         let req = UNNotificationRequest(
@@ -1304,9 +1304,9 @@ final class AppleRelayPendingQueue {
     /// recording went untranscribed.
     private func postEvictionNotification() {
         let content = UNMutableNotificationContent()
-        content.title = String(localized: "Conduck")
+        content.title = String(localized: "Conduck", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         // xcstrings
-        content.body = String(localized: "A queued recording expired before your iPhone could transcribe it.")
+        content.body = String(localized: "A queued recording expired before your iPhone could transcribe it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         content.sound = .default
         let req = UNNotificationRequest(
             identifier: UUID().uuidString,

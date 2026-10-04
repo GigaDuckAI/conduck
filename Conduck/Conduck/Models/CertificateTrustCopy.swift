@@ -49,7 +49,7 @@ enum CertificateTrustCopy {
     /// What happened. One sentence, no jargon, no blame on the network.
     static var untrustedRefusal: String {
         String(localized: "settings.certTrust.untrusted.refusal",
-                defaultValue: "This device doesn't trust the certificate this server presented, so Conduck won't connect to it.")
+                defaultValue: "This device doesn't trust the certificate this server presented, so Conduck won't connect to it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// What to do about it. Every named route is free and issues a certificate
@@ -57,7 +57,7 @@ enum CertificateTrustCopy {
     /// certificate" and no way to act on it.
     static var untrustedRemedy: String {
         String(localized: "settings.certTrust.untrusted.remedy",
-                defaultValue: "Give the server a publicly trusted certificate: Tailscale Serve issues one automatically, Let's Encrypt is free and also issues certificates for plain IP addresses, or put a domain in front with Caddy, which renews for you.")
+                defaultValue: "Give the server a publicly trusted certificate: Tailscale Serve issues one automatically, Let's Encrypt is free and also issues certificates for plain IP addresses, or put a domain in front with Caddy, which renews for you.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Refusal + remedy, for the surfaces that render a single string.
@@ -75,7 +75,7 @@ enum CertificateTrustCopy {
     /// nothing on the watch can change the outcome.
     static var untrustedRefusalCompact: String {
         String(localized: "settings.certTrust.untrusted.refusal.compact",
-                defaultValue: "This device doesn't trust the server's certificate. Open Conduck on your iPhone to see how to fix it.")
+                defaultValue: "This device doesn't trust the server's certificate. Open Conduck on your iPhone to see how to fix it.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     // MARK: - Pin mismatch on a chain the system TRUSTED
@@ -87,7 +87,7 @@ enum CertificateTrustCopy {
     /// configuration they never touched.
     static var pinMismatchRefusal: String {
         String(localized: "settings.certTrust.pinMismatch.refusal",
-                defaultValue: "This server's certificate doesn't match the fingerprint you pinned.")
+                defaultValue: "This server's certificate doesn't match the fingerprint you pinned.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// What to do about it. The remedy is NOT server-side — it is "stop and
@@ -98,7 +98,7 @@ enum CertificateTrustCopy {
     /// the only case where the app's verdict is a false alarm.
     static var pinMismatchRemedy: String {
         String(localized: "settings.certTrust.pinMismatch.remedy",
-                defaultValue: "If you replaced the server's certificate, update the pinned fingerprint in its settings. If you changed nothing, stop — the connection may be intercepted.")
+                defaultValue: "If you replaced the server's certificate, update the pinned fingerprint in its settings. If you changed nothing, stop — the connection may be intercepted.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Refusal + remedy, for the surfaces that render a single string.
@@ -128,7 +128,7 @@ enum CertificateTrustCopy {
     /// neither half needs the machine's role to land.
     static var pinMismatchRefusalCompact: String {
         String(localized: "settings.certTrust.pinMismatch.refusal.compact.v2",
-                defaultValue: "This server's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone.")
+                defaultValue: "This server's certificate doesn't match your pinned fingerprint. The connection may be intercepted — open Conduck on your iPhone.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     // MARK: - Pin could not be COMPUTED on a chain the system TRUSTED
@@ -139,7 +139,7 @@ enum CertificateTrustCopy {
     /// fingerprint "doesn't match": no comparison ever ran.
     static var keyUnpinnableRefusal: String {
         String(localized: "settings.certTrust.keyUnpinnable.refusal",
-                defaultValue: "This server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.")
+                defaultValue: "This server's certificate uses a key type Conduck can't fingerprint, so your pinned fingerprint can't be checked.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// What to do about it. Says out loud that the certificate is fine, because
@@ -156,7 +156,7 @@ enum CertificateTrustCopy {
     /// "correct" the second one away.
     static var keyUnpinnableRemedy: String {
         String(localized: "settings.certTrust.keyUnpinnable.remedy",
-                defaultValue: "The certificate itself is fine and this device trusts it — only the fingerprint check can't run. Reissue it with an RSA 2048/3072/4096 or EC P-256/P-384 key, or clear the saved fingerprint in its settings to go back to ordinary system trust.")
+                defaultValue: "The certificate itself is fine and this device trusts it — only the fingerprint check can't run. Reissue it with an RSA 2048/3072/4096 or EC P-256/P-384 key, or clear the saved fingerprint in its settings to go back to ordinary system trust.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 
     /// Refusal + remedy, for the surfaces that render a single string.
@@ -182,6 +182,6 @@ enum CertificateTrustCopy {
     /// interception warning), and the fix lives on the phone.
     static var keyUnpinnableRefusalCompact: String {
         String(localized: "settings.certTrust.keyUnpinnable.refusal.compact",
-                defaultValue: "Conduck can't check your pin — unsupported certificate key. Your server is fine; open Conduck on your iPhone to fix the pin.")
+                defaultValue: "Conduck can't check your pin — unsupported certificate key. Your server is fine; open Conduck on your iPhone to fix the pin.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
     }
 }

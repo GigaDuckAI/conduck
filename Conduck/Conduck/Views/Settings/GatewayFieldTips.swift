@@ -19,21 +19,21 @@ import SwiftUI
 enum GatewayFieldTips {
 
     /// Gateway URL — the address of the server the user runs.
-    static let url = GatewayFieldTip(
+    static var url: GatewayFieldTip { GatewayFieldTip(
         symbol: "link",
         accessibilityLabel: LocalizedStringResource(
             "settings.remoteAgent.tip.url.a11y",
             defaultValue: "About Gateway URL"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "settings.remoteAgent.tip.url.title",
             defaultValue: "Gateway URL"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "settings.remoteAgent.tip.url.message",
             defaultValue: "The web address of the server you run — the machine your AI actually lives on. Conduck sends your messages there and nowhere else. It must start with https, and it must be reachable from this device: a Tailscale address works anywhere this device runs Tailscale; a home-network address only at home."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Bearer token — the self-hosted lanes' password. ONE tip for all three of them
     /// (OpenClaw · Hermes · custom), so it may only assert what is true of all three:
@@ -46,56 +46,56 @@ enum GatewayFieldTips {
     /// whole job, answered per lane from `GatewayCredentialSource`. Nor does this
     /// point at that sheet's button: the button is visible in the same section and
     /// says what it does, and a custom gateway has no button to point at.
-    static let bearerToken = GatewayFieldTip(
+    static var bearerToken: GatewayFieldTip { GatewayFieldTip(
         symbol: "key.fill",
         accessibilityLabel: LocalizedStringResource(
             "settings.remoteAgent.tip.bearerToken.a11y",
             defaultValue: "About Bearer token"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "settings.remoteAgent.tip.bearerToken.title",
             defaultValue: "Bearer token"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "settings.remoteAgent.tip.bearerToken.message",
             defaultValue: "A password your gateway checks before it will answer, so only your devices can reach your AI. Conduck keeps it in the Keychain and sends it to your gateway and nowhere else."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// API key — the hosted lane (OpenRouter): a vendor-issued credential.
-    static let apiKey = GatewayFieldTip(
+    static var apiKey: GatewayFieldTip { GatewayFieldTip(
         symbol: "key.horizontal.fill",
         accessibilityLabel: LocalizedStringResource(
             "settings.remoteAgent.tip.apiKey.a11y",
             defaultValue: "About API key"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "settings.remoteAgent.tip.apiKey.title",
             defaultValue: "API key"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "settings.remoteAgent.tip.apiKey.message",
             defaultValue: "The key from your OpenRouter account — it identifies you and it's what gets billed. Conduck keeps it in the Keychain and sends it only to OpenRouter. Create one on the OpenRouter site, then paste it here."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// The bearer/keyless toggle — the one row where turning something OFF has a
     /// security consequence, so the tip names it.
-    static let requiresToken = GatewayFieldTip(
+    static var requiresToken: GatewayFieldTip { GatewayFieldTip(
         symbol: "lock.open.fill",
         accessibilityLabel: LocalizedStringResource(
             "settings.remoteAgent.tip.requiresToken.a11y",
             defaultValue: "About Requires a bearer token"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "settings.remoteAgent.tip.requiresToken.title",
             defaultValue: "Requires a bearer token"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "settings.remoteAgent.tip.requiresToken.message",
             defaultValue: "Leave this on unless your gateway is deliberately set up without a password. Off means Conduck sends no password at all — anyone who can reach the address can use your AI. That's only safe on a private network like Tailscale or your own LAN."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Default for new chats — the one tip that annotates a SECTION rather than a
     /// field, because the thing needing explanation is the relationship between
@@ -105,55 +105,55 @@ enum GatewayFieldTips {
     /// share sheet: the Watch Ask flow and CarPlay both have their own choosers,
     /// and the share sheet pre-selects the first configured gateway rather than
     /// this one. Naming only the Action Button and Shortcuts keeps it true.
-    static let defaultForNewChats = GatewayFieldTip(
+    static var defaultForNewChats: GatewayFieldTip { GatewayFieldTip(
         symbol: "clock.arrow.circlepath",
         accessibilityLabel: LocalizedStringResource(
             "settings.personalAI.tip.newChats.a11y",
             defaultValue: "About New chats use"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "settings.personalAI.tip.newChats.title",
             defaultValue: "Where new chats start"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "settings.personalAI.tip.newChats.message",
             defaultValue: "A new chat on this device continues on the gateway you last used, so you don’t have to pick it again each time. This setting is where the first one starts, and where the Action Button and Shortcuts send when nothing asked you to choose."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Model — which brain answers. Self-hosted lanes never see this row.
-    static let model = GatewayFieldTip(
+    static var model: GatewayFieldTip { GatewayFieldTip(
         symbol: "cpu",
         accessibilityLabel: LocalizedStringResource(
             "settings.remoteAgent.tip.model.a11y",
             defaultValue: "About Model"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "settings.remoteAgent.tip.model.title",
             defaultValue: "Model"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "settings.remoteAgent.tip.model.message.v3",
             defaultValue: "Which AI answers you — the exact name your gateway or provider knows it by, such as “llama3”. The connection test fills in the choices it can see."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Image history — a cost/latency lever, so the tip is framed in money and speed.
-    static let imageHistory = GatewayFieldTip(
+    static var imageHistory: GatewayFieldTip { GatewayFieldTip(
         symbol: "photo.stack",
         accessibilityLabel: LocalizedStringResource(
             "settings.remoteAgent.tip.imageHistory.a11y",
             defaultValue: "About Image history"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "settings.remoteAgent.tip.imageHistory.title",
             defaultValue: "Image history"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "settings.remoteAgent.tip.imageHistory.message",
             defaultValue: "How many of the pictures you've already sent get re-sent with each new message, so the AI can still see them. More images means it remembers more, but every turn gets slower and costs more. Older pictures beyond the limit are still referred to by name."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     // MARK: - File transfer
     //
@@ -165,40 +165,40 @@ enum GatewayFieldTips {
     /// sentence under the field says HOW to hand it over; the tip says what it IS,
     /// where it lives, and what leaves the device (the register this file sets for
     /// any security value).
-    static let fileServerPassword = GatewayFieldTip(
+    static var fileServerPassword: GatewayFieldTip { GatewayFieldTip(
         symbol: "key.horizontal.fill",
         accessibilityLabel: LocalizedStringResource(
             "fileTransfer.tip.credential.a11y",
             defaultValue: "About Server password"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "fileTransfer.tip.credential.title",
             defaultValue: "Server password"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "fileTransfer.tip.credential.message",
             defaultValue: "A password Conduck invents for your file server, so only your devices can put files on it — not anyone who happens to find the address. Conduck signs in as “conduck” with this password, keeps it in the Keychain, and sends it to your file server and nowhere else. Your server has to be told the same password, or it turns the upload away."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// File-server URL — the CONCEPT gap, not the format gap. The footer already says
     /// what to paste; the question a first-time reader actually has is why a second
     /// server exists at all.
-    static let fileServerURL = GatewayFieldTip(
+    static var fileServerURL: GatewayFieldTip { GatewayFieldTip(
         symbol: "externaldrive.fill",
         accessibilityLabel: LocalizedStringResource(
             "fileTransfer.tip.url.a11y",
             defaultValue: "About File-server URL"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "fileTransfer.tip.url.title",
             defaultValue: "File-server URL"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "fileTransfer.tip.url.message",
             defaultValue: "Your gateway carries the conversation, but it has nowhere to put a file. So files go to a second small service you run alongside it — a file server — and your agent picks them up from there. This is that service's address, which is why it's a different address and port from the gateway's. Conduck uploads straight to it; the file passes through no one else."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     // MARK: - Guided setup
     //
@@ -217,21 +217,21 @@ enum GatewayFieldTips {
     /// Deliberately names no products: the answer cards below it carry Ollama and
     /// LM Studio, at the point the choice is made. The tip owns the RULE, the cards
     /// own the EXAMPLES.
-    static let runningAsServer = GatewayFieldTip(
+    static var runningAsServer: GatewayFieldTip { GatewayFieldTip(
         symbol: "server.rack",
         accessibilityLabel: LocalizedStringResource(
             "gatewaySetup.readiness.tip.server.a11y",
             defaultValue: "About running as a server"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "gatewaySetup.readiness.tip.server.title",
             defaultValue: "Running as a server"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "gatewaySetup.readiness.tip.server.message",
             defaultValue: "A program that stays on and answers requests at a web address — not something you start, use, and close when you're done. It has to speak the OpenAI-compatible chat API, which is what most AI servers already use. Conduck only connects over https, and the setup step can put that in front of your server for you."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     // MARK: - Shared
 
@@ -239,19 +239,19 @@ enum GatewayFieldTips {
     /// file server), so it only says what is true of both: what the row decides
     /// and what each value means. The jargon (fingerprint, SPKI) stays
     /// quarantined in `CertificateTrustSheet`.
-    static let serverCertificate = GatewayFieldTip(
+    static var serverCertificate: GatewayFieldTip { GatewayFieldTip(
         symbol: "checkmark.shield",
         accessibilityLabel: LocalizedStringResource(
             "settings.remoteAgent.tip.serverCertificate.a11y",
             defaultValue: "About Server certificate"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         title: LocalizedStringResource(
             "settings.remoteAgent.tip.serverCertificate.title",
             defaultValue: "Server certificate"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         message: LocalizedStringResource(
             "settings.remoteAgent.tip.serverCertificate.message.v2",
             defaultValue: "Every https server shows a certificate to prove who it is before Conduck sends anything. Automatic means your device already recognizes it — right for most setups. Conduck refuses a certificate your device doesn't recognize, so a server that made its own needs a real one instead. Pinning is an optional extra: open this row to name one exact certificate and nothing else is accepted."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 }

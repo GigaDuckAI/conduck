@@ -164,21 +164,21 @@ struct DeclinedTurnPresentation: Equatable {
             return DeclinedTurnPresentation(
                 kind: .photoDeclined(confident: confident),
                 title: confident
-                    ? String(localized: "declinedTurn.photo.title.confident", defaultValue: "Photo declined")
-                    : String(localized: "declinedTurn.photo.title.hedged", defaultValue: "No reply"),
+                    ? String(localized: "declinedTurn.photo.title.confident", defaultValue: "Photo declined", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                    : String(localized: "declinedTurn.photo.title.hedged", defaultValue: "No reply", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 body: confident
                     ? String(localized: "declinedTurn.photo.body.confident",
-                             defaultValue: "No reply was created. You can keep chatting with text, or try again after enabling photo support.")
+                             defaultValue: "No reply was created. You can keep chatting with text, or try again after enabling photo support.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     : String(localized: "declinedTurn.photo.body.hedged",
-                             defaultValue: "This gateway couldn't use the photo, so no reply was created."),
+                             defaultValue: "This gateway couldn't use the photo, so no reply was created.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 // A photo sent with no caption IS a wordless turn, and this arm
                 // is reached precisely when the gateway said why it failed. It
                 // already names the cause and the fix, so a second, weaker guess
                 // underneath would only dilute it.
                 hint: nil,
                 toast: confident
-                    ? String(localized: "declinedTurn.photo.toast.confident", defaultValue: "This gateway declined the photo.")
-                    : String(localized: "declinedTurn.photo.toast.hedged", defaultValue: "This gateway couldn't use the photo."),
+                    ? String(localized: "declinedTurn.photo.toast.confident", defaultValue: "This gateway declined the photo.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                    : String(localized: "declinedTurn.photo.toast.hedged", defaultValue: "This gateway couldn't use the photo.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 offersRetry: offersRetry,
                 offersResendWithoutPhoto: hasResendableNonPhotoContent,
                 offersKeepChattingWithoutPhotos: false,
@@ -195,20 +195,20 @@ struct DeclinedTurnPresentation: Equatable {
             return DeclinedTurnPresentation(
                 kind: .historyBlocked(confident: confident),
                 title: confident
-                    ? String(localized: "declinedTurn.history.title.confident", defaultValue: "Chat blocked by an earlier photo")
-                    : String(localized: "declinedTurn.history.title.hedged", defaultValue: "This chat may be blocked by an earlier photo"),
+                    ? String(localized: "declinedTurn.history.title.confident", defaultValue: "Chat blocked by an earlier photo", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                    : String(localized: "declinedTurn.history.title.hedged", defaultValue: "This chat may be blocked by an earlier photo", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 body: confident
                     ? String(localized: "declinedTurn.history.body.confident",
-                             defaultValue: "This gateway rejected the message because this chat contains a photo. Keep chatting without earlier photos to continue this conversation.")
+                             defaultValue: "This gateway rejected the message because this chat contains a photo. Keep chatting without earlier photos to continue this conversation.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
                     : String(localized: "declinedTurn.history.body.hedged",
-                             defaultValue: "This text message failed with the same photo-related error. Keep chatting without earlier photos, or start a new chat."),
+                             defaultValue: "This text message failed with the same photo-related error. Keep chatting without earlier photos, or start a new chat.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 // Same reason as the arm above — and this one is about an EARLIER
                 // photo, so "you didn't type anything" would point at the wrong
                 // turn entirely.
                 hint: nil,
                 toast: confident
-                    ? String(localized: "declinedTurn.history.toast.confident", defaultValue: "An earlier photo is blocking this chat.")
-                    : String(localized: "declinedTurn.history.toast.hedged", defaultValue: "An earlier photo may be blocking this chat."),
+                    ? String(localized: "declinedTurn.history.toast.confident", defaultValue: "An earlier photo is blocking this chat.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
+                    : String(localized: "declinedTurn.history.toast.hedged", defaultValue: "An earlier photo may be blocking this chat.", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                 offersRetry: offersRetry,
                 offersResendWithoutPhoto: false,
                 offersKeepChattingWithoutPhotos: true,
@@ -225,14 +225,14 @@ struct DeclinedTurnPresentation: Equatable {
         // Troubleshoot rides along when Diagnostics can actually reason about
         // the class.
         let body = reconstructed?.descriptionWithRecovery(for: ref)
-            ?? String(localized: "declinedTurn.generic.body", defaultValue: "This message wasn't delivered.")
+            ?? String(localized: "declinedTurn.generic.body", defaultValue: "This message wasn't delivered.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         let hint: String? = (wordlessTurn == .present && Self.gatewayAnsweredAndFailed(reconstructed))
             ? String(localized: "declinedTurn.wordless.hint",
-                     defaultValue: "This message had no text. Some agents reply with nothing when they get a file but no question — send it again with a question.")
+                     defaultValue: "This message had no text. Some agents reply with nothing when they get a file but no question — send it again with a question.", bundle: AppLocalization.bundle, locale: AppLocalization.locale)
             : nil
         return DeclinedTurnPresentation(
             kind: .generic,
-            title: String(localized: "declinedTurn.generic.title", defaultValue: "No reply"),
+            title: String(localized: "declinedTurn.generic.title", defaultValue: "No reply", bundle: AppLocalization.bundle, locale: AppLocalization.locale),
             body: body,
             hint: hint,
             // The TOAST stays one line. It exists to be read in a glance when the

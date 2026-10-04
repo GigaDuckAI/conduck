@@ -41,18 +41,18 @@ enum WorkboardCaptureDestination: Equatable, Sendable {
     var composerPrompt: LocalizedStringResource {
         switch self {
         case .all:
-            LocalizedStringResource("workdesk.capture.all.prompt", defaultValue: "Add to Home…")
+            LocalizedStringResource("workdesk.capture.all.prompt", defaultValue: "Add to Home…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .project(_, let title):
-            LocalizedStringResource("workdesk.capture.project.prompt", defaultValue: "Add to \(title)…")
+            LocalizedStringResource("workdesk.capture.project.prompt", defaultValue: "Add to \(title)…", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
     var dropTitle: LocalizedStringResource {
         switch self {
         case .all:
-            LocalizedStringResource("workdesk.capture.all.drop", defaultValue: "Drop into Home")
+            LocalizedStringResource("workdesk.capture.all.drop", defaultValue: "Drop into Home", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .project(_, let title):
-            LocalizedStringResource("workdesk.capture.project.drop", defaultValue: "Drop into \(title)")
+            LocalizedStringResource("workdesk.capture.project.drop", defaultValue: "Drop into \(title)", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -60,7 +60,7 @@ enum WorkboardCaptureDestination: Equatable, Sendable {
         LocalizedStringResource(
             "workboard.workspace.drop.overlay.caption",
             defaultValue: "Files, photos, screenshots, links and text will be added here. Nothing is sent."
-        )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 }
 
@@ -209,18 +209,18 @@ struct WorkboardCaptureCanvas: View {
             )
         }
         .alert(
-            LocalizedStringResource("composer.camera.deniedTitle", defaultValue: "Camera access is off"),
+            LocalizedStringResource("composer.camera.deniedTitle", defaultValue: "Camera access is off", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
             isPresented: activeCameraDeniedIsPresented
         ) {
-            Button(LocalizedStringResource("composer.camera.openSettings", defaultValue: "Open Settings")) {
+            Button(LocalizedStringResource("composer.camera.openSettings", defaultValue: "Open Settings", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)) {
                 CameraPermission.openSettings()
             }
-            Button(LocalizedStringResource("composer.camera.cancel", defaultValue: "Cancel"), role: .cancel) { }
+            Button(LocalizedStringResource("composer.camera.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), role: .cancel) { }
         } message: {
             Text(LocalizedStringResource(
                 "composer.camera.deniedMessage",
                 defaultValue: "Allow camera access in Settings to take a photo."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         #endif
         .workboardLargeImportAlert(
@@ -369,7 +369,7 @@ struct WorkboardCaptureCanvas: View {
                 String(localized: LocalizedStringResource(
                     "workboard.workspace.import.progress",
                     defaultValue: "%1$lld of %2$lld"
-                )),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 Int64(state.completedCount),
                 Int64(state.totalCount)
             )
@@ -385,7 +385,7 @@ struct WorkboardCaptureCanvas: View {
             .accessibilityLabel(Text(LocalizedStringResource(
                 "workboard.material.importing",
                 defaultValue: "Adding materials"
-            )))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
             .accessibilityValue(Text(verbatim: progressText))
         }
     }
@@ -562,7 +562,7 @@ struct WorkboardCaptureCanvas: View {
         .accessibilityLabel(Text(LocalizedStringResource(
             "workboard.workspace.attach",
             defaultValue: "Attach to Work"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     /// `inCard` suppresses the field's own fill, inset and stroke: inside the
@@ -610,7 +610,7 @@ struct WorkboardCaptureCanvas: View {
             accessibilityLabel: String(localized: LocalizedStringResource(
                 "workboard.voice.capture",
                 defaultValue: "Add by voice"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: {
                 guard workbenchDestinationIsActive else { return }
                 voiceDestination = destination
@@ -637,14 +637,14 @@ struct WorkboardCaptureCanvas: View {
             accessibilityLabel: String(localized: LocalizedStringResource(
                 "workboard.workspace.add",
                 defaultValue: "Add to Work"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             action: addThought
         )
         .keyboardShortcut(.return, modifiers: .command)
         .accessibilityHint(Text(LocalizedStringResource(
             "workboard.workspace.add.hint",
             defaultValue: "Saves this thought privately. Nothing is sent to an AI."
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     private var composerControlDiameter: CGFloat {
@@ -716,7 +716,7 @@ struct WorkboardCaptureCanvas: View {
                 let message = String(localized: LocalizedStringResource(
                     "workboard.workspace.thought.saved",
                     defaultValue: "Added to Work. Nothing was sent."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 if viewModel.notice == nil {
                     viewModel.workspaceStatus = WorkboardTransientStatus(message: message)
                 }
@@ -740,7 +740,7 @@ struct WorkboardCaptureCanvas: View {
             String(localized: LocalizedStringResource(
                 "workboard.material.photo.defaultName",
                 defaultValue: "Photo %lld"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             Int64(item.materials.count + 1)
         )
         let batch = WorkboardResolvedImportBatch(
@@ -769,7 +769,7 @@ struct WorkboardCaptureCanvas: View {
                         String(localized: LocalizedStringResource(
                             "workboard.material.photo.defaultName",
                             defaultValue: "Photo %lld"
-                        )),
+                        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                         Int64(item.materials.count + offset + 1)
                     )
                 ))
@@ -812,7 +812,7 @@ struct WorkboardCaptureCanvas: View {
                     title: LocalizedStringResource(
                         "workboard.material.file.failed.title",
                         defaultValue: "Couldn’t add a file"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     message: error.localizedDescription
                 )
             }
@@ -831,7 +831,7 @@ struct WorkboardCaptureCanvas: View {
         let replacement = WorkboardMaterialImport(
             kind: material.kind,
             name: name,
-            detail: byteCount.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
+            detail: byteCount.map { AppLocalization.byteCount($0, style: .file) },
             mimeType: mimeType,
             fileURL: sourceURL,
             byteCount: byteCount
@@ -1116,7 +1116,7 @@ private struct WorkboardPaneDropModifier: ViewModifier {
                     displayName: String(
                         localized: "workboard.workspace.drop.image",
                         defaultValue: "Dropped image \(index + 1).\(format.ext)"
-                    ),
+                    , bundle: AppLocalization.bundle, locale: AppLocalization.locale),
                     mimeType: format.mime,
                     byteCount: Int64(data.count)
                 ))
@@ -1363,7 +1363,7 @@ private struct WorkboardMaterialBoard: View {
             String(localized: LocalizedStringResource(
                 "workboard.material.remove.confirm.title",
                 defaultValue: "Remove this material?"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             isPresented: Binding(
                 get: { materialPendingRemoval != nil },
                 set: { if !$0 { materialPendingRemoval = nil } }
@@ -1372,14 +1372,14 @@ private struct WorkboardMaterialBoard: View {
             presenting: materialPendingRemoval
         ) { material in
             Button(
-                LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"),
+                LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .destructive
             ) {
                 materialPendingRemoval = nil
                 remove(material)
             }
             Button(
-                LocalizedStringResource("common.cancel", defaultValue: "Cancel"),
+                LocalizedStringResource("common.cancel", defaultValue: "Cancel", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 role: .cancel
             ) {
                 materialPendingRemoval = nil
@@ -1393,11 +1393,11 @@ private struct WorkboardMaterialBoard: View {
                     ? String(localized: LocalizedStringResource(
                         "workboard.material.remove.confirm.message",
                         defaultValue: "“%@” will be removed from your Work desk."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     : String(localized: LocalizedStringResource(
                         "workboard.material.remove.confirm.message.pair",
                         defaultValue: "“%@” and the recording inside it will be removed from your Work desk."
-                    )),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
                 material.name
             ))
         }
@@ -1505,7 +1505,7 @@ private struct WorkboardMaterialBoard: View {
         Label(LocalizedStringResource(
             "workboard.arrange.hint",
             defaultValue: "Drag to reorder"
-        ), systemImage: "hand.draw")
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle), systemImage: "hand.draw")
         .font(.caption)
         .foregroundStyle(AppColors.textSecondary)
         .fixedSize()
@@ -1517,7 +1517,7 @@ private struct WorkboardMaterialBoard: View {
                 Label(mode.title, systemImage: mode.symbol).tag(mode)
             }
         } label: {
-            Text(LocalizedStringResource("workboard.layout.label", defaultValue: "Board view"))
+            Text(LocalizedStringResource("workboard.layout.label", defaultValue: "Board view", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         }
         .pickerStyle(.segmented)
         .frame(width: 184)
@@ -2400,7 +2400,7 @@ enum WorkboardCompanionBand {
         return String(localized: LocalizedStringResource(
             "workboard.voice.recording.untitled",
             defaultValue: "Voice note"
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
     }
 
     /// The words under the name, when there are any. A recording with no
@@ -2486,31 +2486,31 @@ enum WorkboardCompanionBand {
     static func title(for action: WorkboardCompanionAction) -> LocalizedStringResource {
         switch action {
         case .play:
-            return LocalizedStringResource("workboard.companion.play", defaultValue: "Play Recording")
+            return LocalizedStringResource("workboard.companion.play", defaultValue: "Play Recording", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .pause:
-            return LocalizedStringResource("workboard.companion.pause", defaultValue: "Pause Recording")
+            return LocalizedStringResource("workboard.companion.pause", defaultValue: "Pause Recording", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .cancelLoading:
             return LocalizedStringResource(
                 "workboard.audio.cancelLoading",
                 defaultValue: "Cancel Loading"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .openRecording:
             return LocalizedStringResource(
                 "workboard.companion.open.recording",
                 defaultValue: "Open Recording"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .openTranscript:
-            return LocalizedStringResource("workdesk.companion.openTranscript", defaultValue: "Open transcript")
+            return LocalizedStringResource("workdesk.companion.openTranscript", defaultValue: "Open transcript", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .shareRecording:
             return LocalizedStringResource(
                 "workboard.companion.share.recording",
                 defaultValue: "Share Recording"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         case .reattachRecording:
             return LocalizedStringResource(
                 "workboard.companion.reattach",
                 defaultValue: "Reattach Recording"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
         }
     }
 
@@ -2533,8 +2533,8 @@ enum WorkboardCompanionBand {
             ? LocalizedStringResource(
                 "workboard.companion.share.picture",
                 defaultValue: "Share Screenshot"
-            )
-            : LocalizedStringResource("workboard.material.share", defaultValue: "Share")
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+            : LocalizedStringResource("workboard.material.share", defaultValue: "Share", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 
     /// What the folded card SAYS the recording is doing, apart from what it is
@@ -2594,11 +2594,11 @@ enum WorkboardCompanionBand {
             ? LocalizedStringResource(
                 "workboard.companion.card.label",
                 defaultValue: "Screenshot with voice note"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
             : LocalizedStringResource(
                 "workboard.companion.card.label.words",
                 defaultValue: "Screenshot with note"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 }
 
@@ -3269,7 +3269,7 @@ struct WorkboardSourceCard: View {
         .help(String(localized: LocalizedStringResource(
             "workboard.material.card.more",
             defaultValue: "Card actions"
-        )))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 
     /// Open, Share and Reattach are the rows the bytes decide: a card offers
@@ -3280,7 +3280,7 @@ struct WorkboardSourceCard: View {
         if let openAction {
             Button(action: openAction) {
                 Label(
-                    LocalizedStringResource("workboard.material.open", defaultValue: "Open"),
+                    LocalizedStringResource("workboard.material.open", defaultValue: "Open", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "arrow.up.forward.square"
                 )
             }
@@ -3313,7 +3313,7 @@ struct WorkboardSourceCard: View {
                     LocalizedStringResource(
                         "workboard.material.reattach.action",
                         defaultValue: "Reattach or Replace"
-                    ),
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "arrow.triangle.2.circlepath"
                 )
             }
@@ -3327,7 +3327,7 @@ struct WorkboardSourceCard: View {
             if let onMoveEarlier {
                 Button(action: onMoveEarlier) {
                     Label(
-                        LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"),
+                        LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "arrow.left"
                     )
                 }
@@ -3335,7 +3335,7 @@ struct WorkboardSourceCard: View {
             if let onMoveLater {
                 Button(action: onMoveLater) {
                     Label(
-                        LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later"),
+                        LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                         systemImage: "arrow.right"
                     )
                 }
@@ -3346,8 +3346,8 @@ struct WorkboardSourceCard: View {
             Button(role: .destructive, action: onRemove) {
                 Label(
                     organizationActions != nil
-                        ? LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere")
-                        : LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"),
+                        ? LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                        : LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                     systemImage: "trash"
                 )
             }
@@ -3382,27 +3382,27 @@ struct WorkboardSourceCard: View {
                 LocalizedStringResource(
                     "workboard.material.reattach.action",
                     defaultValue: "Reattach or Replace"
-                ),
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: reattachAction
             )
         }
         if let onMoveEarlier {
             Button(
-                LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier"),
+                LocalizedStringResource("workboard.action.moveEarlier", defaultValue: "Move Earlier", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: onMoveEarlier
             )
         }
         if let onMoveLater {
             Button(
-                LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later"),
+                LocalizedStringResource("workboard.action.moveLater", defaultValue: "Move Later", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: onMoveLater
             )
         }
         if let onRemove {
             Button(
                 organizationActions != nil
-                    ? LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere")
-                    : LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material"),
+                    ? LocalizedStringResource("workdesk.material.delete.everywhere", defaultValue: "Delete Everywhere", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+                    : LocalizedStringResource("workboard.material.remove.action", defaultValue: "Remove Material", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
                 action: onRemove
             )
         }
@@ -3530,7 +3530,7 @@ enum WorkboardCardAccessibility {
             String(localized: LocalizedStringResource(
                 "workboard.material.card.position",
                 defaultValue: "%1$lld of %2$lld"
-            )),
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)),
             position,
             count
         )
@@ -3547,7 +3547,7 @@ enum WorkboardCardAccessibility {
             ?? LocalizedStringResource(
                 "workboard.material.reattach.short",
                 defaultValue: "Reattach"
-            )
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
     }
 }
 
@@ -3729,7 +3729,7 @@ enum WorkboardImportMapping {
                 imports.append(WorkboardMaterialImport(
                     kind: .image,
                     name: name,
-                    detail: ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file),
+                    detail: AppLocalization.byteCount(byteCount, style: .file),
                     mimeType: mimeType,
                     fileURL: url,
                     byteCount: byteCount
@@ -3742,7 +3742,7 @@ enum WorkboardImportMapping {
                     kind: materialKind(filename: name, mimeType: mimeType),
                     name: name,
                     detail: byteCount.map {
-                        ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                        AppLocalization.byteCount($0, style: .file)
                     },
                     mimeType: mimeType,
                     fileURL: url,

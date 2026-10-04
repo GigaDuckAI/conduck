@@ -41,7 +41,7 @@ struct GatewayHelperTrustView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.helperTrust.title",
                 defaultValue: "Create your setup code"
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.title2, weight: .bold)
                 .foregroundStyle(AppColors.textEmphasis)
                 .multilineTextAlignment(.center)
@@ -65,15 +65,15 @@ struct GatewayHelperTrustView: View {
                     capabilityRow("magnifyingglass", LocalizedStringResource(
                         "gatewaySetup.helperTrust.does.check",
                         defaultValue: "Checks your server is reachable"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     capabilityRow("lock.shield", LocalizedStringResource(
                         "gatewaySetup.helperTrust.does.link",
                         defaultValue: "Sets up a secure link to your devices"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     capabilityRow("qrcode", LocalizedStringResource(
                         "gatewaySetup.helperTrust.does.code",
                         defaultValue: "Prints a code to bring back here"
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -88,7 +88,7 @@ struct GatewayHelperTrustView: View {
             Text(LocalizedStringResource(
                 "gatewaySetup.helperTrust.connect",
                 defaultValue: "You'll pick how it connects — a private Tailscale link, a free public link (no domain or router setup), Cloudflare, or your own HTTPS."
-            ))
+            , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 .onboardingScaledFont(.footnote)
                 .foregroundStyle(AppColors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -105,7 +105,7 @@ struct GatewayHelperTrustView: View {
                     LocalizedStringResource(
                         "gatewaySetup.helperTrust.safe.confident",
                         defaultValue: "Open source and local — it runs only on your computer, asks before every change it makes, and sends us nothing."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
                 safetyRow(
                     "lock.fill",
@@ -113,7 +113,7 @@ struct GatewayHelperTrustView: View {
                     LocalizedStringResource(
                         "gatewaySetup.helperTrust.safe.keepPrivate",
                         defaultValue: "Your setup code carries your gateway token — keep it private."
-                    )
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
                 )
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -126,7 +126,7 @@ struct GatewayHelperTrustView: View {
                 Text(LocalizedStringResource(
                     "gatewaySetup.helperTrust.cta",
                     defaultValue: "Show me the command"
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                     .onboardingScaledFont(.headline)
                     .foregroundColor(AppColors.textEmphasis)
                     .frame(maxWidth: Constants.Layout.buttonMaxWidth)
@@ -152,7 +152,7 @@ struct GatewayHelperTrustView: View {
         let template = String(localized: LocalizedStringResource(
             "gatewaySetup.helperTrust.lead",
             defaultValue: "Run [conduck-connect](%1$@), a small open-source helper, on that computer."
-        ))
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         let markdown = String(format: template, url)
         return (try? AttributedString(
             markdown: markdown,

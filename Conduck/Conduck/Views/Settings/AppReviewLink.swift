@@ -22,7 +22,7 @@ struct AppReviewLink: View {
         } label: {
             HStack {
                 Label {
-                    Text(LocalizedStringResource("settings.about.review.title", defaultValue: "Write a Review"))
+                    Text(LocalizedStringResource("settings.about.review.title", defaultValue: "Write a Review", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 } icon: {
                     Image(systemName: "star")
                 }
@@ -39,6 +39,6 @@ struct AppReviewLink: View {
         .buttonStyle(.plain)
         #endif
         .accessibilityHint(Text(LocalizedStringResource(
-            "settings.about.review.openHint", defaultValue: "Opens the App Store.")))
+            "settings.about.review.openHint", defaultValue: "Opens the App Store.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)))
     }
 }

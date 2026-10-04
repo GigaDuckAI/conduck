@@ -79,17 +79,17 @@ import Foundation
 import UniformTypeIdentifiers
 
 struct AddFilesToWorkIntent: AppIntent {
-    static var title: LocalizedStringResource = LocalizedStringResource(
+    static var title: LocalizedStringResource { LocalizedStringResource(
         "intent.workAddFiles.title",
         defaultValue: "Add Files to Work"
-    )
+    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle) }
 
-    static var description = IntentDescription(
+    static var description: IntentDescription { IntentDescription(
         LocalizedStringResource(
             "intent.workAddFiles.description",
             defaultValue: "Save files to your private Work desk without sending them to an AI."
-        )
-    )
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)
+    ) }
 
     /// Headless by design. Nothing here needs a screen, and a shortcut that adds
     /// a file mid-automation must not steal the foreground to do it.
@@ -102,7 +102,7 @@ struct AddFilesToWorkIntent: AppIntent {
         title: LocalizedStringResource(
             "intent.workAddFiles.files",
             defaultValue: "Files"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         supportedContentTypes: [.item],
         inputConnectionBehavior: .connectToPreviousIntentResult
     )
@@ -114,7 +114,7 @@ struct AddFilesToWorkIntent: AppIntent {
         title: LocalizedStringResource(
             "intent.workAddFiles.note",
             defaultValue: "Note"
-        ),
+        , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle),
         inputConnectionBehavior: .never
     )
     var note: String?
@@ -252,7 +252,7 @@ struct AddFilesToWorkIntent: AppIntent {
         let confirmation = String(
             localized: "intent.workboardCapture.confirmation",
             defaultValue: "Added to Work. Nothing was sent."
-        )
+        , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         return .result(
             value: inputs.count,
             dialog: IntentDialog(stringLiteral: confirmation)
@@ -591,7 +591,7 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
             return String(
                 localized: "intent.workAddFiles.error.noFiles",
                 defaultValue: "Choose at least one file to add to Work."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .tooManyFiles:
             // The ceiling is deliberately not spoken. A number in the sentence
             // is a second place the limit lives, and a person told "more than
@@ -599,22 +599,22 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
             return String(
                 localized: "intent.workAddFiles.error.tooManyFiles",
                 defaultValue: "That’s too many files to add at once. Add them in smaller batches."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .fileTooLarge(let name):
             return String(
                 localized: "intent.workAddFiles.error.fileTooLarge",
                 defaultValue: "“\(name)” is too big to keep in Work."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .setTooLarge:
             return String(
                 localized: "intent.workAddFiles.error.setTooLarge",
                 defaultValue: "Those files are too big to add at once. Add them in smaller batches."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .unreadableFile(let name):
             return String(
                 localized: "intent.workAddFiles.error.unreadableFile",
                 defaultValue: "“\(name)” couldn’t be read, so nothing was added to Work."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .noteTooLong:
             // The note is named, because the files are not the problem and a
             // sentence that does not say which half to shorten is a sentence
@@ -622,7 +622,7 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
             return String(
                 localized: "intent.workAddFiles.error.noteTooLong",
                 defaultValue: "That note is too long to add to Work. Shorten it, then try again."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         case .audioFile(let name):
             // Names the file and then names the door. A refusal that only says
             // no leaves a person believing Work cannot hold a recording at all,
@@ -630,7 +630,7 @@ enum WorkFileCaptureRefusal: LocalizedError, Equatable {
             return String(
                 localized: "intent.workAddFiles.error.audioFile",
                 defaultValue: "“\(name)” is a recording. Work keeps recordings only when you add them yourself — open Work and use the attachment button."
-            )
+            , bundle: AppLocalization.bundle, locale: AppLocalization.locale)
         }
     }
 }

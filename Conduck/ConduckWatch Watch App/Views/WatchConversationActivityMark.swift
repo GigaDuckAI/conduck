@@ -118,6 +118,6 @@ struct WatchConversationActivityMark: View {
     }
 
     private var newReplyLabel: String {
-        String(localized: "activity.a11y.newReply", defaultValue: "New reply")  // xcstrings: chat-ui
+        String(localized: "activity.a11y.newReply", defaultValue: "New reply", bundle: AppLocalization.bundle, locale: AppLocalization.locale)  // xcstrings: chat-ui
     }
 }
