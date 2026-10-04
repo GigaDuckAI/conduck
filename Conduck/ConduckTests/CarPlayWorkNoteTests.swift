@@ -1542,7 +1542,7 @@ final class CarPlayWorkNoteTests: XCTestCase {
 
         // The two places the driver cancels a start that has no session yet.
         let endButton = try RefusalLaneSource.trailingClosure(
-            after: "CPBarButton(title: String(localized: \"End\"))", in: scene, path: Self.sceneDelegatePath
+            after: "CPBarButton(title: String(localized: \"End\", bundle: AppLocalization.bundle, locale: AppLocalization.locale))", in: scene, path: Self.sceneDelegatePath
         )
         let endCancel = try XCTUnwrap(
             endButton.range(of: "cancelPendingStart(for: service)"),
@@ -1710,7 +1710,7 @@ final class CarPlayWorkNoteTests: XCTestCase {
         // asked before it — and an ordering that a `contains` cannot see is
         // exactly what this pins.
         let endButton = Self.closedBody(try RefusalLaneSource.trailingClosure(
-            after: "CPBarButton(title: String(localized: \"End\"))", in: scene, path: Self.sceneDelegatePath
+            after: "CPBarButton(title: String(localized: \"End\", bundle: AppLocalization.bundle, locale: AppLocalization.locale))", in: scene, path: Self.sceneDelegatePath
         ))
         XCTAssertEqual(
             endButton,
@@ -1988,7 +1988,7 @@ final class CarPlayWorkNoteTests: XCTestCase {
         // name, and a second key here is a second name for the same thing.
         XCTAssertTrue(
             chooser.contains(
-                "text: String(localized: \"carplay.picker.addToWork.title\", defaultValue: \"Add to Work\")"
+                "text: String(localized: \"carplay.picker.addToWork.title\", defaultValue: \"Add to Work\", bundle: AppLocalization.bundle, locale: AppLocalization.locale)"
             ),
             "the chooser's desk row no longer reads from the root row's key — two doors to one action now have two names"
         )

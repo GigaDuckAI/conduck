@@ -893,14 +893,14 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
                     message: String(localized: LocalizedStringResource(
                         "workboard.menuBar.saved",
                         defaultValue: "Added to Work. Nothing was sent."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 )
                 : MenuBarWorkCaptureFeedback(
                     kind: .queued,
                     message: String(localized: LocalizedStringResource(
                         "workboard.menuBar.savedQueued",
                         defaultValue: "On its way to Work. Nothing was sent."
-                    ))
+                    , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
                 )
             """)),
             "The receipt's two arms are no longer exactly (`.saved`, \"Added\") and (`.queued`, "
@@ -923,14 +923,14 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
                 message: String(localized: LocalizedStringResource(
                     "workboard.menuBar.saved",
                     defaultValue: "Added to Work. Nothing was sent."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             )
             : MenuBarWorkCaptureFeedback(
                 kind: .saved,
                 message: String(localized: LocalizedStringResource(
                     "workboard.menuBar.savedQueued",
                     defaultValue: "On its way to Work. Nothing was sent."
-                ))
+                , locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
             )
         """)
         XCTAssertTrue(
@@ -950,7 +950,7 @@ final class MenuBarWorkCaptureStateTests: XCTestCase {
         _ = try? await WorkCaptureDrainer(sourceDevice: SourceDevice.current).drainAvailableCaptures()
         quickWorkCaptureFeedback = MenuBarWorkCaptureFeedback(
             kind: .saved,
-            message: String(localized: LocalizedStringResource("workboard.menuBar.saved", defaultValue: "Added to Work. Nothing was sent."))
+            message: String(localized: LocalizedStringResource("workboard.menuBar.saved", defaultValue: "Added to Work. Nothing was sent.", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle))
         )
         """)
         XCTAssertFalse(

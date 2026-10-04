@@ -188,19 +188,27 @@ final class WorkShortcutIntentsTests: XCTestCase {
 
     /// Phrases and short titles an installed Shortcut, a Siri request and the
     /// Action Button are bound to. The three that shipped are frozen; the two
-    /// new ones are pinned so a rename has to be a decision.
+    /// new ones are pinned so a rename has to be a decision. Titles retain
+    /// their English catalog keys while resolving through the app's selected
+    /// language, rather than the system's language or a bare literal.
     func testTheShortcutProviderCarriesTheFrozenEntriesAndTheTwoNewOnes() throws {
         let source = try RefusalLaneSource.rawSource(at: "Conduck/Intents/AppShortcuts.swift")
 
         for frozen in [
+            "intent: ConverseIntent()",
             "\"Ask \\(.applicationName)\"",
             "\"Talk to \\(.applicationName)\"",
-            "shortTitle: \"Ask Conduck\"",
+            "shortTitle: LocalizedStringResource(\"Ask Conduck\", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)",
+            "systemImageName: \"mic.fill\"",
+            "intent: CheckNetworkIntent()",
             "\"Check \\(.applicationName) is ready\"",
-            "shortTitle: \"Check Conduck\"",
+            "shortTitle: LocalizedStringResource(\"Check Conduck\", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)",
+            "systemImageName: \"checkmark.shield\"",
+            "intent: CaptureWorkboardIntent()",
             "\"Add a thought to my Work desk in \\(.applicationName)\"",
             "\"Capture a thought in \\(.applicationName)\"",
-            "shortTitle: \"Add to Work\"",
+            "shortTitle: LocalizedStringResource(\"Add to Work\", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)",
+            "systemImageName: \"tray.and.arrow.down.fill\"",
         ] {
             XCTAssertTrue(
                 source.contains(frozen),
@@ -212,11 +220,13 @@ final class WorkShortcutIntentsTests: XCTestCase {
             "intent: AddFilesToWorkIntent()",
             "\"Add files to Work in \\(.applicationName)\"",
             "\"Put this on my Work desk in \\(.applicationName)\"",
-            "shortTitle: \"Add Files to Work\"",
+            "shortTitle: LocalizedStringResource(\"Add Files to Work\", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)",
+            "systemImageName: \"doc.badge.plus\"",
             "intent: RecordWorkNoteIntent()",
             "\"Record a note to Work in \\(.applicationName)\"",
             "\"Save a voice note to Work in \\(.applicationName)\"",
-            "shortTitle: \"Record a Note to Work\"",
+            "shortTitle: LocalizedStringResource(\"Record a Note to Work\", locale: AppLocalization.locale, bundle: AppLocalization.resourceBundle)",
+            "systemImageName: \"mic.badge.plus\"",
         ] {
             XCTAssertTrue(source.contains(added), "AppShortcuts.swift is missing \(added)")
         }
