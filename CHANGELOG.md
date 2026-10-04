@@ -7,6 +7,29 @@ and build number Apple shows — and matches `v<version>-<build>` in this
 repository. Versions 1.3 and 1.4 shipped on macOS while iOS moved directly
 from 1.2 to 1.5.
 
+## [1.7-18] — choose your app language
+
+Release build, tagged `v1.7-18` on 4 October 2026.
+
+### Added
+
+- Use Conduck in English, Spanish, Simplified Chinese or Japanese across
+  iPhone, iPad, Mac, Apple Watch and CarPlay
+- Choose your app language before setup the first time you open this version,
+  and change it anytime in Settings. Switching languages keeps your drafts
+  and navigation in place
+- iPhone, iPad and Mac each keep their own language choice. Apple Watch and
+  CarPlay follow the connected iPhone; the choice does not sync through iCloud
+- Translated setup, Chats, Work, settings, usage, errors and accessibility
+  labels, plus the Mac menu bar, share sheets, widgets and Shortcuts.
+  Dates, times and file sizes follow the chosen app language
+
+### Developer-facing
+
+- A localization check in CI verifies all four languages, format arguments,
+  plural forms, named variables and link destinations across the app's
+  string catalogs
+
 ## [1.6.4-17] — choose your Apple voice
 
 App Store build, tagged `v1.6.4-17` on 23 September 2026. 7 commits since 1.6.3.
