@@ -35832,7 +35832,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "質問に使うAI"
+            "value" : "質問の入力方法"
           }
         }
       }

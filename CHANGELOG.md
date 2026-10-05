@@ -7,6 +7,13 @@ and build number Apple shows — and matches `v<version>-<build>` in this
 repository. Versions 1.3 and 1.4 shipped on macOS while iOS moved directly
 from 1.2 to 1.5.
 
+## [1.7-19] — clearer Japanese input settings
+
+### Fixed
+
+- Mac: the Japanese menu-bar Voice/Text selector now says “Question input
+  method” rather than incorrectly describing which AI answers the question
+
 ## [1.7-18] — choose your app language
 
 Release build, tagged `v1.7-18` on 4 October 2026.
